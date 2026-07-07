@@ -9,11 +9,10 @@ import { fetchMe, type CurrentUser } from '../api/client';
 /**
  * Spec 550: SSO identity for the app.
  *
- * On mount we call GET /api/auth/me. In deployed environments the Kanopy SSO
- * gateway has already authenticated the request and injected the JWT, so this
- * returns the real signed-in user. Locally (AUTH_DEV_BYPASS) it returns the dev
- * user. The email is shown as the read-only user-id badge and used by
- * ChatContext as the `user_id` for memory/thread scoping.
+ * On mount we call GET /api/auth/me. In an SSO deployment the platform gateway has
+ * already authenticated the request, so this returns the real signed-in user. Locally
+ * (AUTH_MODE=local) it returns the dev user. The email is shown as the read-only user-id
+ * badge and used by ChatContext as the `user_id` for memory/thread scoping.
  */
 interface AuthContextValue {
   email: string;

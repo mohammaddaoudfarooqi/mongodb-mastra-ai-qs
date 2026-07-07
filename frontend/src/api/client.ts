@@ -1,19 +1,20 @@
 const API_BASE = '/api';
 
 /**
- * Spec 550: SSO auth header.
+ * Optional SSO auth header (deployment-specific).
  *
- * In deployed environments the Kanopy SSO gateway injects the
- * `x-kanopy-internal-authorization` JWT server-side, so the browser sends
- * nothing. Locally there is no gateway: the backend's AUTH_DEV_BYPASS handles
- * the common case, but a developer can exercise the real-JWT path by setting
- * `VITE_DEV_FAKE_JWT` — when present (dev builds only) we attach it here.
+ * In an SSO deployment the platform gateway injects the auth JWT server-side, so the
+ * browser normally sends nothing. Locally there is no gateway. A developer can exercise
+ * the real-JWT path by setting `VITE_DEV_FAKE_JWT` (dev builds only); the header name it
+ * is sent under is configurable via `VITE_SSO_HEADER` (defaults to `x-sso-authorization`),
+ * so no deployment-specific header name is hardcoded in this public code.
  */
 function authHeaders(): Record<string, string> {
   const jwt = import.meta.env.DEV
     ? (import.meta.env.VITE_DEV_FAKE_JWT as string | undefined)
     : undefined;
-  return jwt ? { 'x-kanopy-internal-authorization': jwt } : {};
+  const header = (import.meta.env.VITE_SSO_HEADER as string | undefined) || 'x-sso-authorization';
+  return jwt ? { [header]: jwt } : {};
 }
 
 /** The authenticated SSO user, returned by GET /api/auth/me. */

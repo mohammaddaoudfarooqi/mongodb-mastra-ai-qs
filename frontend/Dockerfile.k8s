@@ -12,9 +12,9 @@ FROM nginx:alpine
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY nginx.k8s.conf /etc/nginx/conf.d/default.conf
 
-# Kanopy hardening: run as a non-root user and move nginx's pid file to /tmp
-# so the pod can run on a read-only root filesystem. Without these, Kanopy's
-# default pod security policy rejects the deployment.
+# Pod-security hardening: run as a non-root user and move nginx's pid file to /tmp
+# so the pod can run on a read-only root filesystem. Without these, a restricted
+# pod security policy rejects the deployment.
 RUN adduser -D -u 1000 appuser && \
     chown -R appuser:appuser /usr/share/nginx/html /var/cache/nginx /var/log/nginx && \
     sed -i 's|/run/nginx.pid|/tmp/nginx.pid|' /etc/nginx/nginx.conf
