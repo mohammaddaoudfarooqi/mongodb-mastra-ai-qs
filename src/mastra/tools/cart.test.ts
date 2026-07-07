@@ -34,11 +34,18 @@ function stubDb(products: any[] = PRODUCTS) {
     findOne: async (filter: any) => { calls.push({ op: 'findOne', filter }); return doc; },
     updateOne: async (filter: any, update: any) => {
       calls.push({ op: 'updateOne', filter, update });
-      doc ??= { ...filter, lines: [] };
+      doc ??= { userId: filter.userId, threadId: filter.threadId, lines: [] };
       if (update.$push?.lines) doc.lines.push(update.$push.lines);
       if (update.$pull?.lines) {
         const pid = update.$pull.lines.product_id;
         doc.lines = doc.lines.filter((l: CartLine) => l.product_id !== pid);
+      }
+      // Positional qty bump for the idempotent re-add path ($inc on lines.$.qty, keyed by
+      // the filter's 'lines.product_id').
+      if (update.$inc?.['lines.$.qty'] !== undefined) {
+        const pid = filter['lines.product_id'];
+        const l = doc.lines.find((x: CartLine) => x.product_id === pid);
+        if (l) l.qty += update.$inc['lines.$.qty'];
       }
       return { acknowledged: true };
     },
@@ -168,5 +175,40 @@ describe('buildCartTools identity binding', () => {
     await cartAdd.execute!({ line: { product_id: 'prod_0021', qty: 1 } } as any, {} as any);
     await cartRemove.execute!({ product_id: 'prod_0021' } as any, {} as any);
     expect(mutations).toBe(2);
+  });
+
+  // Single-add guard (verify:demo caught the model calling cartAdd 3x for one request).
+  it('re-adding the SAME product bumps qty instead of duplicating the line', async () => {
+    const { db } = stubDb();
+    const { cartAdd } = buildCartTools({ db, ...key });
+    await cartAdd.execute!({ line: { product_id: 'prod_0021', qty: 1 } } as any, {} as any);
+    const res: any = await cartAdd.execute!({ line: { product_id: 'prod_0021', qty: 1 } } as any, {} as any);
+    expect(res.ok).toBe(true);
+    const cart: any = await buildCartTools({ db, ...key }).cartRead.execute!({} as any, {} as any);
+    expect(cart.lines).toHaveLength(1);          // one line, not two
+    expect(cart.lines[0].qty).toBe(2);           // qty bumped
+  });
+
+  it('refuses a 2nd DISTINCT product in the same turn by default (maxDistinctAddsPerTurn=1)', async () => {
+    const { db } = stubDb();
+    const { cartAdd } = buildCartTools({ db, ...key });
+    const first: any = await cartAdd.execute!({ line: { product_id: 'prod_0021', qty: 1 } } as any, {} as any);
+    const second: any = await cartAdd.execute!({ line: { product_id: 'prod_0061', qty: 1 } } as any, {} as any);
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(false);
+    expect(second.reason).toMatch(/not added|already added/i);
+    const cart: any = await buildCartTools({ db, ...key }).cartRead.execute!({} as any, {} as any);
+    expect(cart.lines).toHaveLength(1);          // only the first product
+  });
+
+  it('allows several distinct adds when maxDistinctAddsPerTurn is raised', async () => {
+    const { db } = stubDb();
+    const { cartAdd } = buildCartTools({ db, ...key, maxDistinctAddsPerTurn: 5 });
+    const a: any = await cartAdd.execute!({ line: { product_id: 'prod_0021', qty: 1 } } as any, {} as any);
+    const b: any = await cartAdd.execute!({ line: { product_id: 'prod_0061', qty: 1 } } as any, {} as any);
+    expect(a.ok).toBe(true);
+    expect(b.ok).toBe(true);
+    const cart: any = await buildCartTools({ db, ...key }).cartRead.execute!({} as any, {} as any);
+    expect(cart.lines).toHaveLength(2);
   });
 });

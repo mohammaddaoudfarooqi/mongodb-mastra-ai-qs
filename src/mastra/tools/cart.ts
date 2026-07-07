@@ -111,10 +111,21 @@ export function buildCartTools(args: {
    * so a genuine reference self-heals by re-querying.
    */
   turnProductIds?: Set<string>;
+  /**
+   * Max number of DISTINCT new products cartAdd may add in a single turn. The model
+   * (both haiku and sonnet) sometimes calls cartAdd 2–3 times for one "add an item"
+   * request, ballooning the cart — a prompt rule alone doesn't stop it. Defaults to 1:
+   * a re-add of the same product just bumps its qty (idempotent), and a 2nd DISTINCT
+   * product in the same turn is refused. A turn that genuinely means "add several"
+   * raises this when building the tools. This is the authoritative single-add guard.
+   */
+  maxDistinctAddsPerTurn?: number;
 }) {
   const carts = args.db.collection<CartDoc>('carts');
   const products = args.db.collection<ProductDoc>('products');
   const key = { userId: args.userId, threadId: args.threadId };
+  const maxAdds = args.maxDistinctAddsPerTurn ?? 1;
+  const addedThisTurn = new Set<string>();
   const read = createTool({
     id: 'cartRead',
     description: 'Read the current shopping cart for this conversation.',
@@ -159,7 +170,33 @@ export function buildCartTools(args: {
             `with that exact _id.`,
         };
       }
+      // Idempotent re-add: if this product is already a cart line, bump its qty instead of
+      // pushing a duplicate. Fixes the model calling cartAdd twice for the same item.
+      const existing = await carts.findOne(key);
+      const already = (existing?.lines ?? []).find(l => l.product_id === line.product_id);
+      if (already) {
+        args.onMutate?.();
+        addedThisTurn.add(line.product_id);
+        await carts.updateOne(
+          { ...key, 'lines.product_id': line.product_id },
+          { $inc: { 'lines.$.qty': line.qty }, $set: { updated_at: new Date().toISOString() } },
+        );
+        return { ok: true, line: { ...already, qty: already.qty + line.qty } };
+      }
+      // Per-turn distinct-add cap: refuse a 2nd distinct product in one turn unless the
+      // tools were built to allow several. Blocks the spurious multi-add that balloons the
+      // cart on a single-item request (verify:demo caught 3 lines from one turn).
+      if (!addedThisTurn.has(line.product_id) && addedThisTurn.size >= maxAdds) {
+        logger.info('cart add cap hit', { product_id: line.product_id, addedThisTurn: addedThisTurn.size, maxAdds });
+        return {
+          ok: false,
+          reason:
+            `You already added ${addedThisTurn.size} product(s) this turn and the shopper asked for one. ` +
+            `"${line.name}" was NOT added. Do not add more items; summarize what is already in the cart.`,
+        };
+      }
       args.onMutate?.();
+      addedThisTurn.add(line.product_id);
       await carts.updateOne(
         key,
         { $push: { lines: line }, $set: { updated_at: new Date().toISOString() } },
