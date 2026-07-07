@@ -12,6 +12,10 @@ export interface Config {
   port: number; defaultUserId: string;
   mongoPool: { maxPoolSize: number; minPoolSize: number };
   prewarmQueries?: string[];
+  // Auth mode: 'local' (default) trusts the client-supplied user_id — demo only, not secure.
+  // 'sso' requires a registered authenticator (a deployment-provided adapter) and rejects
+  // unauthenticated requests; client-supplied identity is ignored. `authRequired` is derived (sso ⇒ true).
+  authMode: 'local' | 'sso'; authRequired: boolean;
 }
 
 const bool = (v: string | undefined, d: boolean) => (v == null ? d : v === 'true');
@@ -35,6 +39,7 @@ const schema = z.object({
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const parsed = schema.parse(env);
   const allowInsecure = bool(parsed.ALLOW_INSECURE, false);
+  const authMode = env.AUTH_MODE === 'sso' ? 'sso' as const : 'local' as const;
   const isTls = parsed.MONGODB_URI.startsWith('mongodb+srv://') || /[?&]tls=true/.test(parsed.MONGODB_URI);
   if (!isTls && !allowInsecure) {
     throw new Error('MONGODB_URI must use TLS (mongodb+srv:// or tls=true). Set ALLOW_INSECURE=true to override for local dev.');
@@ -66,6 +71,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ingestPdfScale: num(env.INGEST_PDF_SCALE, 2.0),
     port: num(env.PORT, 8000),
     defaultUserId: env.DEFAULT_USER_ID ?? 'demo',
+    authMode,
+    authRequired: authMode === 'sso',
     mongoPool: {
       maxPoolSize: num(env.MONGO_MAX_POOL_SIZE, 100),
       minPoolSize: num(env.MONGO_MIN_POOL_SIZE, 10),

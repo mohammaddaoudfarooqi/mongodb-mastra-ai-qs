@@ -157,5 +157,20 @@ pnpm provision && pnpm seed && pnpm embed
 - The `.env` `VOYAGE_API_KEY` is a MongoDB Atlas Voyage key; it authenticates against the
   MongoDB-hosted Voyage endpoint (`VOYAGE_BASE_URL`, default `https://ai.mongodb.com/v1`).
 - Human-in-the-loop checkout is implemented: the storefront's approval card drives the order
-  workflow via the `/api/interrupts/resume` SSE flow. There is no real SSO in this quickstart;
-  `/auth/me` returns a fixed dev user derived from `DEFAULT_USER_ID`.
+  workflow via the `/api/interrupts/resume` SSE flow.
+
+### Authentication
+
+The app runs in one of two auth modes, set by `AUTH_MODE`:
+
+- **`local` (default) — no login.** The server trusts the client-supplied `user_id`, and
+  `/auth/me` returns a dev user from `DEFAULT_USER_ID`. This is intentional for the demo (it
+  lets you switch users to show cross-thread memory), but it means **any client can act as any
+  user**. Do not expose a `local` deployment on a public network.
+- **`sso` — identity is server-trusted.** Set `AUTH_MODE=sso` and point `AUTH_ADAPTER_MODULE`
+  at a deployment-provided adapter (the hosting platform's SSO integration). The adapter validates
+  the platform session and supplies the user; client-supplied `user_id`/`thread_id` are ignored, and
+  requests without a valid session get `401`. The adapter module lives with the deployment and is
+  not part of this repo. It must export `register(register, cfg)` and call `register(fn)` with an
+  authenticator `(c) => { userId } | null`. If `AUTH_MODE=sso` and no adapter loads, the app fails
+  closed (every request `401`s) rather than trusting client identity.

@@ -3,6 +3,7 @@ import { loadConfig, type Config } from '../config';
 import { logger } from '../observability/logger';
 import { buildRouteContext, handlers, type RouteContext } from './routes';
 import { buildOrderRunner } from './order-runner';
+import { initAuth } from './auth';
 
 /**
  * The standalone Hono app used for local dev (`tsx src/server/app.ts`), the
@@ -41,6 +42,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   // Load .env into process.env before validating config (Node >=20.12 built-in; no-op if absent).
   try { process.loadEnvFile(); } catch { /* no .env present: rely on the ambient environment */ }
   const cfg = loadConfig();
+  await initAuth(cfg); // register the SSO adapter in AUTH_MODE=sso; no-op locally
   const app = createApp(cfg);
   const { serve } = await import('@hono/node-server');
   serve({ fetch: app.fetch, port: cfg.port });

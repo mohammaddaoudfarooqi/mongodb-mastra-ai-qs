@@ -9,6 +9,7 @@ import { buildPlaceOrderWorkflow } from './workflows/place-order';
 import { buildOrderRunner } from '../server/order-runner';
 import { buildRouteContext, handlers, type RouteContext } from '../server/routes';
 import { buildSpaRoute } from '../server/static';
+import { initAuth } from '../server/auth';
 
 /**
  * The browser-facing HTTP routes, registered on the Mastra server under `/api/*`.
@@ -82,3 +83,10 @@ export function buildMastra(cfg: Config = loadConfig()) {
 }
 
 export const mastra = buildMastra();
+
+// Register the SSO adapter (AUTH_MODE=sso) at module load. Fire-and-forget: routes fail
+// closed (401) until it resolves, so an early request cannot slip through unauthenticated.
+// No-op in local demo mode. Guarded so importing this module in tests never triggers it.
+if (process.env.AUTH_MODE === 'sso') {
+  void initAuth(loadConfig()).catch(() => { /* logged inside initAuth */ });
+}
