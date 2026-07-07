@@ -3,6 +3,7 @@ import type { Db } from 'mongodb';
 import type { MongoDBVector } from '@mastra/mongodb';
 import type { Config } from '../config';
 import { logger } from '../observability/logger';
+import { confirmDestructive } from '../destructive-guard';
 import { createKnowledgeVector, KNOWLEDGE_INDEX } from '../mastra/vector';
 import { getDocEmbedder, buildDocContent, type DocEmbedder } from '../mastra/embed';
 import {
@@ -58,6 +59,9 @@ export async function seedRetail(
 }
 
 export async function runSeed(cfg: Config): Promise<{ products: number; orders: number; promotions: number; knowledge: number }> {
+  // seedRetail wipes collection contents — echo the target and refuse a prod-looking DB
+  // (reviewer finding #12). No CONFIRM gate: seeding is a routine setup step.
+  confirmDestructive(cfg, 'seed (replace app collection contents)');
   const client = new MongoClient(cfg.mongoUri);
   const vector = createKnowledgeVector(cfg);
   try {

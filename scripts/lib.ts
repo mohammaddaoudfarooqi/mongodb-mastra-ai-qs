@@ -1,5 +1,9 @@
 import type { Config } from '../src/config';
 
+// Re-export so existing `scripts/` imports keep working; the guard lives in src/ so
+// src-side entrypoints (seed.ts) can use it without importing across into scripts/.
+export { confirmDestructive } from '../src/destructive-guard';
+
 export function batched<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));

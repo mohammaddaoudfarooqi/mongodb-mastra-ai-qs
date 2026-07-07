@@ -33,8 +33,33 @@ if [ ! -f .env ]; then
   exit 1
 fi
 
-# Load .env into this shell (ignore comments/blank lines).
-set -a; . ./.env; set +a
+# Read a single KEY from .env WITHOUT sourcing it. Sourcing (`. ./.env`) executes the file
+# as shell, so a real credential containing shell metacharacters (& ? $ ( ) etc. — common in
+# connection strings and keys) would be word-split, truncated, or run as commands. Instead
+# take the first `KEY=` line, strip the key + an optional inline `# comment`, and trim
+# surrounding quotes/space — treating the value as literal text, never as code.
+read_env() {
+  local key="$1" line
+  line=$(grep -m1 -E "^[[:space:]]*${key}=" .env 2>/dev/null) || return 0
+  line="${line#*=}"
+  # Drop a trailing " # comment" only when the value is not quoted.
+  case "$line" in
+    \"*\" | \'*\') ;;                       # fully quoted — leave as-is, strip quotes below
+    *) line="${line%%#*}" ;;
+  esac
+  # Trim leading/trailing whitespace.
+  line="${line#"${line%%[![:space:]]*}"}"
+  line="${line%"${line##*[![:space:]]}"}"
+  # Strip one layer of matching surrounding quotes.
+  case "$line" in
+    \"*\") line="${line#\"}"; line="${line%\"}" ;;
+    \'*\') line="${line#\'}"; line="${line%\'}" ;;
+  esac
+  printf '%s' "$line"
+}
+
+MONGODB_URI=$(read_env MONGODB_URI)
+VOYAGE_API_KEY=$(read_env VOYAGE_API_KEY)
 
 if [ -z "$MONGODB_URI" ]; then
   echo "❌ MONGODB_URI is not set in .env — add your Atlas connection string."

@@ -1,11 +1,13 @@
 import { MongoClient } from 'mongodb';
 import { loadConfig } from '../src/config';
 import { logger } from '../src/observability/logger';
-import { APP_OWNED_COLLECTIONS } from './lib';
+import { APP_OWNED_COLLECTIONS, confirmDestructive } from './lib';
 
 async function main() {
   try { process.loadEnvFile(); } catch { /* .env optional */ }
   const cfg = loadConfig();
+  // Drops app-owned collections — gate on explicit confirmation + prod-name refusal.
+  confirmDestructive(cfg, 'teardown (drop app-owned collections)', { requireConfirm: true });
   const client = new MongoClient(cfg.mongoUri);
   try {
     await client.connect();
