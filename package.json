@@ -19,6 +19,7 @@
     "embed": "tsx src/ingestion/ingest-multimodal.ts",
     "provision": "tsx scripts/provision-indexes.ts",
     "prewarm": "tsx scripts/prewarm-cache.ts",
+    "verify:demo": "tsx scripts/verify-demo.ts",
     "teardown": "tsx scripts/teardown.ts",
     "make:catalog": "tsx scripts/make-catalog-pdf.ts",
     "fetch:catalog-images": "tsx scripts/fetch-catalog-images.ts"
