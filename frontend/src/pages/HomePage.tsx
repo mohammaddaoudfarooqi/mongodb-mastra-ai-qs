@@ -4,7 +4,7 @@ import { fetchStats } from '../api/client';
 import Header from '../components/Header';
 import PresetGrid from '../components/PresetGrid';
 import HeroLeaf from '../components/hero/HeroLeaf';
-import { MongoLeaf, MastraWordmark } from '../components/brand';
+import { MastraWordmark } from '../components/brand';
 
 /* ── Animated count-up ─────────────────────────────────────────────────── */
 function useCountUp(target: number, durationMs = 1200): number {
@@ -289,7 +289,12 @@ export default function HomePage() {
               opacity: 0.85,
             }}
           >
-            <MongoLeaf size={18} glow={false} />
+            <img
+              src="/MongoDB_White.svg"
+              alt="MongoDB"
+              height={16}
+              style={{ height: 16, width: 'auto', opacity: 0.9 }}
+            />
             <span style={{ color: 'var(--text-secondary)' }} aria-hidden="true">
               +
             </span>
