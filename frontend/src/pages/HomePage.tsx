@@ -289,11 +289,15 @@ export default function HomePage() {
               opacity: 0.85,
             }}
           >
+            {/* The MongoDB wordmark's tall leaf makes its "MongoDB" text only ~37% of the
+                SVG box height, so matching Mastra by box-height would render the MongoDB
+                text visibly smaller. Give it a taller box (~1.6x) so the two wordmarks'
+                text cap-heights line up optically. */}
             <img
               src="/MongoDB_White.svg"
               alt="MongoDB"
-              height={16}
-              style={{ height: 16, width: 'auto', opacity: 0.9 }}
+              height={26}
+              style={{ height: 26, width: 'auto', opacity: 0.9 }}
             />
             <span style={{ color: 'var(--text-secondary)' }} aria-hidden="true">
               +
