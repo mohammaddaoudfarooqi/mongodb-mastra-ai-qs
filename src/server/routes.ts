@@ -12,6 +12,7 @@ import { isReadEligible, isWriteEligible } from '../cache/cache-decisions';
 import { getQueryEmbedder } from '../mastra/embed';
 import { maxTokensFor, temperatureFor, modelChoices } from '../mastra/models';
 import { buildFeedbackDoc, type FeedbackRequest } from './feedback';
+import { resolveUserId, getAuthenticator } from './auth';
 
 function freshSignals(): TurnContext['signals'] {
   return { knowledgeSearchRan: false, knowledgeSearchHadResults: false, dataQueryRan: false, mutatingToolRan: false };
@@ -36,7 +37,7 @@ function freshSignals(): TurnContext['signals'] {
  */
 export interface OrderRunner {
   start: (threadId: string, userId: string) => Promise<{ status: string; suspendPayload?: any }>;
-  resume: (threadId: string, decision: string, editedAction?: any) => Promise<{ status: string; message?: string }>;
+  resume: (threadId: string, decision: string, editedAction?: any, cartVersion?: string) => Promise<{ status: string; message?: string }>;
 }
 
 export interface RouteContext {
@@ -95,7 +96,16 @@ export const handlers = {
   chat: (rc: RouteContext) => async (c: Context): Promise<Response> => {
     const cfg = rc.cfg;
     const body = await c.req.json<{ user_id?: string; thread_id?: string; message: string; model?: string }>();
-    const userId = body.user_id || cfg.defaultUserId;
+    // Validate the message before doing anything else (reviewer finding #8).
+    if (typeof body?.message !== 'string' || !body.message.trim()) {
+      return c.json({ detail: 'message is required' }, 400);
+    }
+    // Server-trusted identity (reviewer finding #1): in SSO mode userId comes from the
+    // validated session and client-supplied user_id is ignored; unauthenticated ⇒ 401.
+    // In local demo mode it falls back to the client value or the default.
+    const who = await resolveUserId(c, cfg, body.user_id);
+    if ('unauthorized' in who) return c.json({ detail: 'authentication required' }, 401);
+    const userId = who.userId;
     const threadId = body.thread_id || `${userId}:default`;
     const model = body.model || cfg.llmModel;
     const correlationId = rc.nextCorrelationId();
@@ -151,6 +161,11 @@ export const handlers = {
 
       // Miss: run the agent and adapt its stream to Cartsmith frames.
       const answerParts: string[] = [];
+      // Set if the agent stream yields an `error` part (toCartsmithFrames emits an `error`
+      // terminal and stops). A turn that errored produced only a PARTIAL answer, so it must
+      // never be written to the cache — otherwise the truncated text could later be served
+      // as a confident cache hit for the same opener (reviewer finding #6).
+      let streamErrored = false;
       const temp = temperatureFor(model);
       // maxSteps gives the concierge router room to delegate to a specialist AND then
       // compose a grounded reply from what the specialist returned. Without it, a turn
@@ -164,6 +179,7 @@ export const handlers = {
       async function* parts(): AsyncGenerator<StreamPart> {
         for await (const part of agentStream.fullStream as AsyncIterable<StreamPart>) {
           if (part.type === 'text-delta') answerParts.push(field<string>(part, 'text') ?? field<string>(part, 'delta') ?? '');
+          if (part.type === 'error') streamErrored = true;
           yield part;
         }
       }
@@ -199,7 +215,7 @@ export const handlers = {
 
       // Cache write (grounded + non-dataQuery + non-mutating). A checkout turn is
       // mutating, so `isWriteEligible` is false — but guard explicitly too (INV-003).
-      if (!looksLikeCheckout && !turn.checkoutRequested && cfg.responseCache.enabled && isReadEligible(priorCount) && isWriteEligible(turn.signals) && answerParts.length) {
+      if (!streamErrored && !looksLikeCheckout && !turn.checkoutRequested && cfg.responseCache.enabled && isReadEligible(priorCount) && isWriteEligible(turn.signals) && answerParts.length) {
         try { await rc.cache.save(body.message, userId, model, answerParts.join(''), new Date()); }
         catch (err) { logger.warn('cache save failed', { err: String(err), correlationId }); }
       }
@@ -211,15 +227,17 @@ export const handlers = {
     models: modelChoices(rc.cfg.llmModel),
   }),
 
-  // Auth stub: the vendored frontend's AuthProvider calls GET /auth/me on mount
-  // and throws on non-2xx. There is no real SSO here, so return a fixed dev user
-  // derived from config. The frontend shows `email` as a read-only badge and uses
-  // it as `user_id` for memory/thread scoping.
-  authMe: (rc: RouteContext) => (c: Context): Response => c.json({
-    email: rc.cfg.defaultUserId,
-    username: rc.cfg.defaultUserId,
-    groups: [] as string[],
-  }),
+  // The frontend's AuthProvider calls GET /auth/me on mount and throws on non-2xx.
+  // In SSO mode this returns the authenticated user (client cannot influence it) and
+  // 401s when there is no valid session. In local demo mode there is no login, so it
+  // returns the configured dev user; the frontend shows `email` as a read-only badge
+  // and uses it as `user_id` for memory/thread scoping.
+  authMe: (rc: RouteContext) => async (c: Context): Promise<Response> => {
+    const id = await getAuthenticator()(c);
+    if (id?.userId) return c.json({ email: id.userId, username: id.userId, groups: [] as string[] });
+    if (rc.cfg.authRequired) return c.json({ detail: 'authentication required' }, 401);
+    return c.json({ email: rc.cfg.defaultUserId, username: rc.cfg.defaultUserId, groups: [] as string[] });
+  },
 
   health: () => (c: Context): Response => c.json({ status: 'ok' }),
 
@@ -233,7 +251,9 @@ export const handlers = {
   },
 
   cart: (rc: RouteContext) => async (c: Context): Promise<Response> => {
-    const userId = c.req.query('user_id') || rc.cfg.defaultUserId;
+    const who = await resolveUserId(c, rc.cfg, c.req.query('user_id'));
+    if ('unauthorized' in who) return c.json({ detail: 'authentication required' }, 401);
+    const userId = who.userId;
     const threadId = c.req.query('thread_id') || `${userId}:default`;
     try {
       const doc = await rc.db.collection('carts').findOne({ userId, threadId });
@@ -243,7 +263,9 @@ export const handlers = {
   },
 
   messages: (rc: RouteContext) => async (c: Context): Promise<Response> => {
-    const userId = c.req.query('user_id') || rc.cfg.defaultUserId;
+    const who = await resolveUserId(c, rc.cfg, c.req.query('user_id'));
+    if ('unauthorized' in who) return c.json({ detail: 'authentication required' }, 401);
+    const userId = who.userId;
     const threadId = c.req.query('thread_id');
     if (!threadId) return c.json({ messages: [] });
     try {
@@ -255,7 +277,9 @@ export const handlers = {
   },
 
   latestThread: (rc: RouteContext) => async (c: Context): Promise<Response> => {
-    const userId = c.req.query('user_id') || rc.cfg.defaultUserId;
+    const who = await resolveUserId(c, rc.cfg, c.req.query('user_id'));
+    if ('unauthorized' in who) return c.json({ detail: 'authentication required' }, 401);
+    const userId = who.userId;
     try {
       const deps = rc.getSharedDeps();
       const result = await deps.memory.listThreads({ filter: { resourceId: userId } });
@@ -273,18 +297,29 @@ export const handlers = {
   // (REQ-E-031/032). Fail-open to an `error` frame. `thread_id` is the composite
   // value echoed verbatim from the interrupt frame.
   resume: (rc: RouteContext) => async (c: Context): Promise<Response> => {
-    let body: { thread_id?: string; decision?: string; edited_action?: any };
+    let body: { thread_id?: string; decision?: string; edited_action?: any; cart_version?: string };
     try { body = await c.req.json(); } catch { return c.body(null, 400); }
     const threadId = body.thread_id;
     const decision = body.decision;
     if (!threadId || !decision) return c.body(null, 400);
+    if (!['approve', 'edit', 'reject'].includes(decision)) return c.body(null, 400);
+    // In SSO mode, bind the resume to the authenticated user: the composite thread_id is
+    // `${userId}:…`, so a client cannot resume another user's suspended checkout (finding #1).
+    if (rc.cfg.authRequired) {
+      const id = await getAuthenticator()(c);
+      if (!id?.userId) return c.json({ detail: 'authentication required' }, 401);
+      if (threadId !== id.userId && !threadId.startsWith(`${id.userId}:`)) {
+        return c.json({ detail: 'forbidden' }, 403);
+      }
+    }
     const correlationId = rc.nextCorrelationId();
     return stream(c, async honoStream => {
       c.header('Content-Type', 'text/event-stream');
       await honoStream.write(serializeFrame('correlation', correlationId));
       try {
         if (!rc.orderRunner) throw new Error('checkout is not configured');
-        const result = await rc.orderRunner.resume(threadId, decision, body.edited_action);
+        // cart_version binds this approval to the exact quote the shopper saw (finding #3).
+        const result = await rc.orderRunner.resume(threadId, decision, body.edited_action, body.cart_version);
         const msg = result.message ?? (result.status === 'placed' ? 'Order placed.' : 'Order cancelled.');
         await honoStream.write(serializeFrame('token', msg));
         await honoStream.write(serializeFrame('done', ''));

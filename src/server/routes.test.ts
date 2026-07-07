@@ -1,7 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { Hono } from 'hono';
 import type { Db } from 'mongodb';
 import { buildRouteContext, handlers, type RouteContext } from './routes';
+import { registerAuthenticator, resetAuthenticator } from './auth';
 import type { Config } from '../config';
 
 const cfg = {
@@ -102,6 +103,16 @@ describe('handlers.chat (REQ-E-004 / boundary #3: SSE streams incrementally)', (
     return app;
   }
 
+  it('rejects a chat request with a missing/empty message (400) — reviewer finding #8', async () => {
+    for (const bad of [{}, { message: '' }, { message: '   ' }, { message: 123 }]) {
+      const res = await chatApp().request('/chat', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ user_id: 'demo', thread_id: 't1', ...bad }),
+      });
+      expect(res.status).toBe(400);
+    }
+  });
+
   it('streams correlation → token(s) → done as SSE frames', async () => {
     const res = await chatApp().request('/chat', {
       method: 'POST',
@@ -114,6 +125,84 @@ describe('handlers.chat (REQ-E-004 / boundary #3: SSE streams incrementally)', (
     expect(text).toContain('event: token\ndata: Hel');
     expect(text).toContain('event: token\ndata: lo');
     expect(text).toContain('event: done');
+  });
+
+  // Reviewer finding #6: a turn that grounds on knowledgeSearch but then ERRORS mid-stream
+  // produced only a partial answer — it must NOT be written to the response cache, or the
+  // truncated text could later be served as a confident cache hit.
+  it('does NOT cache a grounded answer when the stream errors mid-response', async () => {
+    async function* groundedThenError() {
+      yield { type: 'tool-result', toolName: 'knowledgeSearch' } as any; // write-eligible signal
+      yield { type: 'text-delta', text: 'Partial ans' } as any;
+      yield { type: 'error', error: 'model blew up' } as any;
+    }
+    const saved: unknown[] = [];
+    const rc = stubRc({
+      cfg: { ...cfg, responseCache: { ...cfg.responseCache, enabled: true } },
+      db: { collection: () => ({ countDocuments: async () => 0 }) } as unknown as Db,
+      cache: { lookup: async () => null, save: async (...a: unknown[]) => { saved.push(a); } } as any,
+      getSharedDeps: () => ({} as any),
+      buildAgent: (_cfg: Config, turn: any) => {
+        // Simulate knowledgeSearch running with results (write-eligible per isWriteEligible).
+        turn.signals.knowledgeSearchRan = true;
+        turn.signals.knowledgeSearchHadResults = true;
+        return { agent: { stream: async () => ({ fullStream: groundedThenError() }) }, memory: fakeMemory };
+      },
+    });
+    const app = new Hono();
+    app.post('/chat', handlers.chat(rc));
+    const res = await app.request('/chat', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: 'how long does shipping take?', user_id: 'demo', thread_id: 'demo:new' }),
+    });
+    const text = await res.text();
+    expect(text).toContain('event: error');   // the stream surfaced the error
+    expect(saved.length).toBe(0);              // and nothing was cached
+  });
+});
+
+describe('auth enforcement on identity-bearing routes (reviewer finding #1)', () => {
+  afterEach(() => resetAuthenticator());
+
+  const ssoCart = () => {
+    const rc = stubRc({
+      cfg: { ...cfg, authMode: 'sso', authRequired: true } as Config,
+      db: { collection: () => ({ findOne: async () => ({ lines: [] }) }) } as unknown as Db,
+    });
+    const app = new Hono();
+    app.get('/cart', handlers.cart(rc));
+    return app;
+  };
+
+  it('SSO mode: /cart is 401 without an authenticated session', async () => {
+    const res = await ssoCart().request('/cart?user_id=attacker');
+    expect(res.status).toBe(401);
+  });
+
+  it('SSO mode: /cart uses the authenticated user, ignoring ?user_id', async () => {
+    let queriedUserId: string | undefined;
+    registerAuthenticator(() => ({ userId: 'real@corp' }));
+    const rc = stubRc({
+      cfg: { ...cfg, authMode: 'sso', authRequired: true } as Config,
+      db: { collection: () => ({ findOne: async (q: any) => { queriedUserId = q.userId; return { lines: [] }; } }) } as unknown as Db,
+    });
+    const app = new Hono();
+    app.get('/cart', handlers.cart(rc));
+    const res = await app.request('/cart?user_id=attacker');
+    expect(res.status).toBe(200);
+    expect(queriedUserId).toBe('real@corp'); // not "attacker"
+  });
+
+  it('local mode: /cart trusts ?user_id (demo behavior preserved)', async () => {
+    let queriedUserId: string | undefined;
+    const rc = stubRc({
+      db: { collection: () => ({ findOne: async (q: any) => { queriedUserId = q.userId; return { lines: [] }; } }) } as unknown as Db,
+    });
+    const app = new Hono();
+    app.get('/cart', handlers.cart(rc));
+    const res = await app.request('/cart?user_id=alice');
+    expect(res.status).toBe(200);
+    expect(queriedUserId).toBe('alice');
   });
 });
 

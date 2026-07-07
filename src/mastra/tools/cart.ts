@@ -1,6 +1,6 @@
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
-import type { Db } from 'mongodb';
+import type { Db, Collection } from 'mongodb';
 import { logger } from '../../observability/logger';
 
 export interface CartLine {
@@ -9,7 +9,37 @@ export interface CartLine {
   applied_coupons: string[]; line_savings: number;
 }
 
+/** The `carts` document shape, keyed on {userId, threadId}. Typing the collection with
+ *  this lets the MongoDB driver accept `$push: { lines }` / `$pull` without casts. */
+export interface CartDoc {
+  userId: string;
+  threadId: string;
+  lines: CartLine[];
+  updated_at: string | null;
+}
+
+/** The `products` fields the cart resolver reads (a partial view of the full catalog doc). */
+interface ProductDoc {
+  _id: string;
+  name: string;
+  price_usd: number;
+  sale_price_usd: number | null;
+  on_sale: boolean;
+}
+
 export const MUTATING_TOOLS = new Set<string>(['cartAdd', 'cartRemove']);
+
+/**
+ * A deterministic fingerprint of a cart's contents (product_id + qty per line, order-
+ * independent). Used to bind a checkout quote to the exact cart it was built from: if the
+ * shopper changes the cart after the approval card appears, the fingerprint no longer
+ * matches and the order workflow refuses to place a stale quote / wipe the new cart
+ * (reviewer finding #3). Deterministic (no time/random) so it is stable across the
+ * suspend→resume boundary and across processes/replicas.
+ */
+export function cartFingerprint(lines: CartLine[]): string {
+  return lines.map(l => `${l.product_id}:${l.qty}`).sort().join('|');
+}
 
 /** Subtotal uses the effective (sale when present) unit price × qty; savings summed from lines. */
 export function computeCartTotals(lines: CartLine[]): { subtotal: number; total_savings: number } {
@@ -42,18 +72,18 @@ function escapeRegex(s: string): string {
  * (and downstream checkout stock lookup, which keys on the real `_id`) is always correct.
  * Returns null when no product resolves, so cartAdd can refuse rather than store a bad line.
  */
-async function resolveLine(products: ReturnType<Db['collection']>, input: any): Promise<CartLine | null> {
+async function resolveLine(products: Collection<ProductDoc>, input: any): Promise<CartLine | null> {
   const qty = Number.isFinite(input?.qty) && input.qty > 0 ? Math.floor(input.qty) : 1;
-  let doc: any = null;
+  let doc: ProductDoc | null = null;
   if (typeof input?.product_id === 'string' && input.product_id) {
-    doc = await products.findOne({ _id: input.product_id as any });
+    doc = await products.findOne({ _id: input.product_id });
   }
   if (!doc && typeof input?.name === 'string' && input.name.trim()) {
     doc = await products.findOne({ name: { $regex: `^${escapeRegex(input.name.trim())}$`, $options: 'i' } });
   }
   if (!doc) return null;
 
-  const unit_price_usd = doc.price_usd as number;
+  const unit_price_usd = doc.price_usd;
   const sale_price_usd = doc.on_sale && typeof doc.sale_price_usd === 'number' ? doc.sale_price_usd : null;
   // Round to cents so savings don't display binary-float noise (e.g. 29.200000000000003).
   const line_savings = sale_price_usd !== null ? Math.round((unit_price_usd - sale_price_usd) * qty * 100) / 100 : 0;
@@ -82,8 +112,8 @@ export function buildCartTools(args: {
    */
   turnProductIds?: Set<string>;
 }) {
-  const carts = args.db.collection('carts');
-  const products = args.db.collection('products');
+  const carts = args.db.collection<CartDoc>('carts');
+  const products = args.db.collection<ProductDoc>('products');
   const key = { userId: args.userId, threadId: args.threadId };
   const read = createTool({
     id: 'cartRead',
@@ -146,7 +176,7 @@ export function buildCartTools(args: {
       args.onMutate?.();
       await carts.updateOne(
         key,
-        { $pull: { lines: { product_id: inputData.product_id } } as any, $set: { updated_at: new Date().toISOString() } },
+        { $pull: { lines: { product_id: inputData.product_id } }, $set: { updated_at: new Date().toISOString() } },
       );
       return { ok: true };
     },
