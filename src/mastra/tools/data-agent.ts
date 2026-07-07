@@ -37,6 +37,12 @@ export async function runValidatedFind(
 
 export function buildDataQueryTool(args: {
   db: Db; allowList: string[]; limit: number; onSignals?: () => void;
+  /**
+   * Reports the `products` `_id`s a query returned this turn, so cartAdd can enforce
+   * retrieval grounding (only add a product the shopper's request actually surfaced).
+   * Only products rows are reported — orders/promotions ids are irrelevant to the cart.
+   */
+  onProductsFound?: (ids: string[]) => void;
 }) {
   return createTool({
     id: 'dataQuery',
@@ -46,7 +52,7 @@ export function buildDataQueryTool(args: {
     inputSchema: z.object({ collection: z.string(), filter: z.record(z.any()).default({}) }),
     execute: async (inputData, context) => {
       args.onSignals?.();
-      return runValidatedFind(
+      const result = await runValidatedFind(
         { collection: inputData.collection, filter: inputData.filter },
         {
           allowList: args.allowList,
@@ -54,6 +60,10 @@ export function buildDataQueryTool(args: {
           find: (c, f, l) => args.db.collection(c).find(f as any).limit(l).toArray(),
         },
       );
+      if (result.ok && inputData.collection === 'products' && result.rows?.length) {
+        args.onProductsFound?.((result.rows as any[]).map(r => String(r._id)));
+      }
+      return result;
     },
   });
 }

@@ -60,8 +60,11 @@ Use dataQuery for live prices, stock, orders, and promotions. Never invent produ
 To add something to the cart: first find the product with dataQuery to get its _id and name, then call
 cartAdd with a line { product_id (the _id, e.g. "prod_0061"), name, qty }. cartAdd looks up the live
 price and savings itself — do NOT compute unit_price_usd, sale_price_usd, or line_savings, and always
-pass the real _id from dataQuery as product_id (never a name-derived slug). If cartAdd returns
-{ ok: false }, the product was not found — tell the shopper rather than claiming it was added. The cart
+pass the real _id from dataQuery as product_id (never a name-derived slug). Only add a product you
+found with dataQuery in THIS turn for what the shopper asked — never an item you merely remember from
+earlier or that came up in a different context; if the shopper refers to something from before, look it
+up again first. If cartAdd returns { ok: false }, do exactly what its reason says (usually: run the
+right dataQuery and add one of those results); never claim an item was added when it was not. The cart
 belongs to this conversation automatically — never pass user or thread IDs to the cart tools.
 IMPORTANT — act, don't interrogate: when the shopper asks to add "an" on-sale item or a product by a
 category/attribute without naming a specific one, DO NOT reply with a list of options and DO NOT ask them
@@ -124,15 +127,21 @@ export function buildConcierge(cfg: Config, turn: TurnContext, deps?: ConciergeD
     rrfK: cfg.rrfK,
     onSignals: s => { turn.signals.knowledgeSearchRan = true; turn.signals.knowledgeSearchHadResults = s.hadResults; },
   });
+  // Products surfaced by dataQuery THIS turn. Shared between the two tools (built together
+  // per turn) so cartAdd can enforce retrieval grounding: only add a product the shopper's
+  // request actually surfaced, never one that leaked in from memory or model generation.
+  const turnProductIds = new Set<string>();
   const dataQuery = buildDataQueryTool({
     db, allowList: cfg.dataAgentAllowList, limit: cfg.dataAgentLimit,
     onSignals: () => { turn.signals.dataQueryRan = true; },
+    onProductsFound: ids => { for (const id of ids) turnProductIds.add(id); },
   });
   const cart = buildCartTools({
     db,
     userId: turn.userId ?? cfg.defaultUserId,
     threadId: turn.threadId ?? `${turn.userId ?? cfg.defaultUserId}:default`,
     onMutate: () => { turn.signals.mutatingToolRan = true; },
+    turnProductIds,
   });
   const checkout = buildCheckoutTool({ onCheckout: () => { turn.checkoutRequested = true; } });
 

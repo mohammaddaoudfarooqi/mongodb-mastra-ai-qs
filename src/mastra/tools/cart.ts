@@ -1,6 +1,7 @@
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
 import type { Db } from 'mongodb';
+import { logger } from '../../observability/logger';
 
 export interface CartLine {
   product_id: string; name: string; qty: number;
@@ -67,7 +68,20 @@ async function resolveLine(products: ReturnType<Db['collection']>, input: any): 
   };
 }
 
-export function buildCartTools(args: { db: Db; userId: string; threadId: string; onMutate?: () => void }) {
+export function buildCartTools(args: {
+  db: Db; userId: string; threadId: string; onMutate?: () => void;
+  /**
+   * The `_id`s the specialist's dataQuery returned THIS turn (populated live as queries
+   * run). Retrieval grounding: if this set is non-empty, an add is only allowed for a
+   * product it contains — the item must come from what the shopper's request actually
+   * surfaced, not from memory or model generation. When it is empty (no product query
+   * surfaced anything this turn — e.g. a pure "add the bottle I mentioned earlier"
+   * reference), the gate is inactive and resolution proceeds by _id/name, so legitimate
+   * memory references still work. A rejection tells the model to look the product up,
+   * so a genuine reference self-heals by re-querying.
+   */
+  turnProductIds?: Set<string>;
+}) {
   const carts = args.db.collection('carts');
   const products = args.db.collection('products');
   const key = { userId: args.userId, threadId: args.threadId };
@@ -96,6 +110,25 @@ export function buildCartTools(args: { db: Db; userId: string; threadId: string;
       // resolves, refuse — never store a line the checkout stock lookup can't key on.
       const line = await resolveLine(products, inputData.line);
       if (!line) return { ok: false, reason: 'Product not found — could not add to cart.' };
+      // Retrieval grounding: when a product query surfaced results this turn, only add one
+      // of those. Catches the "added an item that wasn't in the search results" bug (an
+      // off-constraint pick from memory/generation) without parsing the request. An empty
+      // set means no query surfaced anything (pure memory reference) — gate stays inactive.
+      const grounded = args.turnProductIds;
+      if (grounded && grounded.size > 0 && !grounded.has(line.product_id)) {
+        // Observability: an ungrounded add attempt (item not in this turn's results) is the
+        // signature of memory/generation leaking into a grounded request. Log it so the rate
+        // is measurable in production, then refuse and steer the model back to its results.
+        logger.info('cart grounding reject', { product_id: line.product_id, resultCount: grounded.size });
+        return {
+          ok: false,
+          reason:
+            `"${line.name}" (${line.product_id}) is not one of the products your dataQuery returned ` +
+            `this turn, so it was NOT added. Do not ask the shopper anything. Pick one product _id ` +
+            `from your most recent dataQuery results that matches the request and call cartAdd again ` +
+            `with that exact _id.`,
+        };
+      }
       args.onMutate?.();
       await carts.updateOne(
         key,

@@ -117,6 +117,41 @@ describe('buildCartTools identity binding', () => {
     expect(calls.some(c => c.op === 'updateOne')).toBe(false);   // no cart mutation
   });
 
+  // Retrieval grounding (fixes the "adds a product not in the search results" bug — a
+  // constraint-request contamination where memory/generation supplies an off-constraint
+  // item). The gate keys on THIS turn's product-query results, not on parsing the request.
+  it('rejects an add that is not in this turn\'s product-query results', async () => {
+    const { db, calls } = stubDb();
+    // A products query ran this turn and returned prod_0021 (e.g. "on-sale kitchen").
+    const turnProductIds = new Set(['prod_0021']);
+    const { cartAdd } = buildCartTools({ db, ...key, turnProductIds });
+    // Model tries to add prod_0061 — a real product, but NOT one the query surfaced.
+    const res: any = await cartAdd.execute!({ line: { product_id: 'prod_0061', qty: 1 } } as any, {} as any);
+    expect(res.ok).toBe(false);
+    expect(res.reason).toMatch(/dataQuery|not added|cartAdd again/i);   // drives a retry, not a question
+    expect(calls.some(c => c.op === 'updateOne')).toBe(false);   // nothing added
+  });
+
+  it('allows an add that IS in this turn\'s product-query results', async () => {
+    const { db, calls } = stubDb();
+    const turnProductIds = new Set(['prod_0021', 'prod_0061']);
+    const { cartAdd } = buildCartTools({ db, ...key, turnProductIds });
+    const res: any = await cartAdd.execute!({ line: { product_id: 'prod_0021', qty: 1 } } as any, {} as any);
+    expect(res.ok).toBe(true);
+    expect(calls.some(c => c.op === 'updateOne')).toBe(true);
+  });
+
+  it('allows a memory-reference add when NO product query returned rows this turn', async () => {
+    const { db, calls } = stubDb();
+    // Empty set = no products query surfaced anything this turn (a pure "add the bottle I
+    // mentioned earlier" reference, or a name query that missed). Memory add must still work.
+    const turnProductIds = new Set<string>();
+    const { cartAdd } = buildCartTools({ db, ...key, turnProductIds });
+    const res: any = await cartAdd.execute!({ line: { product_id: 'prod_0061', qty: 1 } } as any, {} as any);
+    expect(res.ok).toBe(true);
+    expect(calls.some(c => c.op === 'updateOne')).toBe(true);
+  });
+
   it('cartRead derives totals from the bound cart lines', async () => {
     const { db, setDoc } = stubDb();
     setDoc({ ...key, lines: [{ product_id: 'p1', name: 'Mug', qty: 2, unit_price_usd: 10, sale_price_usd: 8, applied_coupons: [], line_savings: 4 }] });
