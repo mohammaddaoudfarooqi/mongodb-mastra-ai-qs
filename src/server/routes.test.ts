@@ -222,6 +222,57 @@ describe('handlers.chat (REQ-E-004 / boundary #3: SSE streams incrementally)', (
     expect(text).toContain('event: correlation');
     expect(text).toContain('event: error');
   });
+
+  // Transient-overload resilience: a gateway "Overloaded" before any output retries and
+  // recovers, so a live demo survives an upstream blip on the hero prompt.
+  it('retries a transient LLM overload (before output) and then succeeds', async () => {
+    let attempts = 0;
+    async function* overloadedThenOk() {
+      attempts++;
+      if (attempts === 1) { yield { type: 'error', error: 'Overloaded' } as any; return; }
+      yield { type: 'text-delta', text: 'Recovered answer' } as any;
+      yield { type: 'finish' } as any;
+    }
+    const rc = stubRc({
+      cfg: { ...cfg, responseCache: { ...cfg.responseCache, enabled: false } },
+      getSharedDeps: () => ({} as any),
+      buildAgent: () => ({ agent: { stream: async () => ({ fullStream: overloadedThenOk() }) }, memory: fakeMemory }),
+    });
+    const app = new Hono();
+    app.post('/chat', handlers.chat(rc));
+    const res = await app.request('/chat', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: 'hi', user_id: 'demo', thread_id: 't1' }),
+    });
+    const text = await res.text();
+    expect(attempts).toBe(2);                       // it retried once
+    expect(text).toContain('event: token\ndata: Recovered answer');
+    expect(text).toContain('event: done');
+    expect(text).not.toContain('event: error');     // the transient error was swallowed
+  });
+
+  // A NON-transient error is surfaced immediately, not retried.
+  it('does NOT retry a non-transient error', async () => {
+    let attempts = 0;
+    async function* badRequest() {
+      attempts++;
+      yield { type: 'error', error: 'invalid request: bad model' } as any;
+    }
+    const rc = stubRc({
+      cfg: { ...cfg, responseCache: { ...cfg.responseCache, enabled: false } },
+      getSharedDeps: () => ({} as any),
+      buildAgent: () => ({ agent: { stream: async () => ({ fullStream: badRequest() }) }, memory: fakeMemory }),
+    });
+    const app = new Hono();
+    app.post('/chat', handlers.chat(rc));
+    const res = await app.request('/chat', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: 'hi', user_id: 'demo', thread_id: 't1' }),
+    });
+    const text = await res.text();
+    expect(attempts).toBe(1);                        // no retry
+    expect(text).toContain('event: error');
+  });
 });
 
 describe('auth enforcement on identity-bearing routes (reviewer finding #1)', () => {

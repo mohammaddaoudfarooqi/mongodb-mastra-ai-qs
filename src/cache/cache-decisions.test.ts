@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isReadEligible, isWriteEligible, expiresAt, capToBytes, type TurnSignals } from './cache-decisions';
+import { isReadEligible, isWriteEligible, isHedge, expiresAt, capToBytes, type TurnSignals } from './cache-decisions';
 
 const grounded: TurnSignals = {
   knowledgeSearchRan: true, knowledgeSearchHadResults: true, dataQueryRan: false, mutatingToolRan: false,
@@ -23,6 +23,32 @@ describe('cache decisions', () => {
 
   it('write is blocked when a mutating tool ran', () => {
     expect(isWriteEligible({ ...grounded, mutatingToolRan: true })).toBe(false);
+  });
+
+  describe('isHedge (anti-poison guard)', () => {
+    it('flags apology / could-not-retrieve answers (never cache these)', () => {
+      for (const a of [
+        "I apologize—I wasn't able to locate a summer sale pamphlet in the knowledge base.",
+        "I'm sorry, I couldn't find that recipe.",
+        "I apologize — I'm not finding detailed information about our loyalty program.",
+        "I'm having trouble retrieving the recipe right now.",
+        "Unable to locate the pamphlet you asked about.",
+        "I'm unable to find that information.",
+      ]) {
+        expect(isHedge(a)).toBe(true);
+      }
+    });
+
+    it('does NOT flag a real grounded answer', () => {
+      for (const a of [
+        'Return Policy\n# Return Policy\nMost items can be returned within 30 days.',
+        "Here's what the Summer Sale Pamphlet is promoting: up to 30% off outdoor and kitchen.",
+        'Members earn 1 point per dollar spent; 100 points = $5 in rewards.',
+        'Recipe: 20-Minute Garlic Butter Pasta. Cook 400 g of spaghetti until al dente.',
+      ]) {
+        expect(isHedge(a)).toBe(false);
+      }
+    });
   });
 
   it('expiresAt adds ttlDays to now', () => {

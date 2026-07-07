@@ -8,7 +8,7 @@ import { projectMessage } from './projection';
 import { buildConcierge, buildConciergeDeps, type TurnContext, type ConciergeDeps } from '../mastra/agent';
 import { computeCartTotals, type CartLine } from '../mastra/tools/cart';
 import { SemanticResponseCache } from '../cache/semantic-response-cache';
-import { isReadEligible, isWriteEligible } from '../cache/cache-decisions';
+import { isReadEligible, isWriteEligible, isHedge } from '../cache/cache-decisions';
 import { getQueryEmbedder } from '../mastra/embed';
 import { maxTokensFor, temperatureFor, modelChoices } from '../mastra/models';
 import { buildFeedbackDoc, type FeedbackRequest } from './feedback';
@@ -16,6 +16,22 @@ import { resolveUserId, getAuthenticator } from './auth';
 
 function freshSignals(): TurnContext['signals'] {
   return { knowledgeSearchRan: false, knowledgeSearchHadResults: false, dataQueryRan: false, mutatingToolRan: false };
+}
+
+/** Sentinel thrown to trigger a retry of the agent stream (distinct from a real error). */
+const RETRY = Symbol('retry-agent-stream');
+
+const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
+/**
+ * True for TRANSIENT upstream LLM errors worth a quick retry: gateway overload (Anthropic
+ * `Overloaded`/`overloaded_error`, HTTP 529), rate limits (429), and generic timeouts /
+ * connection resets. Deterministic errors (bad request, auth) are NOT retried — retrying
+ * them just wastes time and delays the error the user needs to see.
+ */
+function isTransientLLMError(err: unknown): boolean {
+  const s = (typeof err === 'string' ? err : (err as any)?.message ?? (err as any)?.type ?? String(err ?? '')).toLowerCase();
+  return /overloaded|rate.?limit|too many requests|429|529|503|timeout|etimedout|econnreset|econnrefused|socket hang up|service unavailable/.test(s);
 }
 
 /**
@@ -182,11 +198,34 @@ export const handlers = {
       // Create the agent stream INSIDE the generator so a throw during stream creation or
       // iteration is caught by toCartsmithFrames' try/catch and turned into an `error` +
       // (nothing after) terminal — never a 200 stream with only a correlation frame (R2 #1).
+      //
+      // Transient upstream blips (LLM gateway "Overloaded"/429/529/rate limit) are common
+      // and recover on a quick retry. We retry ONLY while nothing has been emitted yet
+      // (before the first token/tool/interrupt) so a retry never duplicates visible output;
+      // once real output starts, an error is surfaced as-is. This is what lets a live demo
+      // survive a momentary overload instead of failing the hero prompt.
       async function* parts(): AsyncGenerator<StreamPart> {
-        const agentStream = await agent.stream(message, streamOpts);
-        for await (const part of agentStream.fullStream as AsyncIterable<StreamPart>) {
-          if (part.type === 'text-delta') answerParts.push(field<string>(part, 'text') ?? field<string>(part, 'delta') ?? '');
-          yield part;
+        const maxAttempts = 3;
+        for (let attempt = 1; ; attempt++) {
+          let emitted = false;
+          try {
+            const agentStream = await agent.stream(message, streamOpts);
+            for await (const part of agentStream.fullStream as AsyncIterable<StreamPart>) {
+              if (part.type === 'error' && !emitted && attempt < maxAttempts && isTransientLLMError(field(part, 'error') ?? field(part, 'message'))) {
+                // Transient error before any output — swallow this stream and retry.
+                logger.warn('agent stream transient error; retrying', { attempt, correlationId });
+                throw RETRY;
+              }
+              if (part.type === 'text-delta') { answerParts.push(field<string>(part, 'text') ?? field<string>(part, 'delta') ?? ''); emitted = true; }
+              else if (part.type === 'tool-call' || part.type === 'tool-call-start' || part.type === 'tool-result' || part.type === 'error') emitted = true;
+              yield part;
+            }
+            return; // stream completed
+          } catch (err) {
+            // A throw during stream creation/iteration: retry if transient and nothing emitted.
+            if (err !== RETRY && (emitted || attempt >= maxAttempts || !isTransientLLMError(err))) throw err;
+            await sleep(250 * attempt); // brief backoff before the next attempt
+          }
         }
       }
       // If the agent asked to check out, start the order workflow as a `beforeDone`
@@ -226,8 +265,14 @@ export const handlers = {
 
       // Cache write (grounded + non-dataQuery + non-mutating). A checkout turn is
       // mutating, so `isWriteEligible` is false — but guard explicitly too (INV-003).
-      if (!streamErrored && !looksLikeCheckout && !turn.checkoutRequested && cfg.responseCache.enabled && isReadEligible(priorCount) && isWriteEligible(turn.signals) && answerParts.length) {
-        try { await rc.cache.save(message, userId, model, answerParts.join(''), new Date()); }
+      // Also never cache an apology/"couldn't retrieve" answer (isHedge): a write-eligible
+      // turn can still hedge if the model fumbles the grounding, and a cached hedge is then
+      // replayed to every future opener with the same wording (this poisoned the demo's hero
+      // prompts). A skipped hedge just recomputes next time — cheap insurance.
+      const answer = answerParts.join('');
+      if (!streamErrored && !looksLikeCheckout && !turn.checkoutRequested && cfg.responseCache.enabled
+          && isReadEligible(priorCount) && isWriteEligible(turn.signals) && answer.length && !isHedge(answer)) {
+        try { await rc.cache.save(message, userId, model, answer, new Date()); }
         catch (err) { logger.warn('cache save failed', { err: String(err), correlationId }); }
       }
     });
