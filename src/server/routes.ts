@@ -95,11 +95,14 @@ export function buildRouteContext(cfg: Config): RouteContext {
 export const handlers = {
   chat: (rc: RouteContext) => async (c: Context): Promise<Response> => {
     const cfg = rc.cfg;
-    const body = await c.req.json<{ user_id?: string; thread_id?: string; message: string; model?: string }>();
+    // Parse defensively: malformed JSON must be a 400, not an unhandled 500 (R2 #1).
+    let body: { user_id?: string; thread_id?: string; message?: string; model?: string };
+    try { body = await c.req.json(); } catch { return c.json({ detail: 'invalid JSON body' }, 400); }
     // Validate the message before doing anything else (reviewer finding #8).
     if (typeof body?.message !== 'string' || !body.message.trim()) {
       return c.json({ detail: 'message is required' }, 400);
     }
+    const message = body.message; // narrowed to string; stable ref for the stream closure
     // Server-trusted identity (reviewer finding #1): in SSO mode userId comes from the
     // validated session and client-supplied user_id is ignored; unauthenticated ⇒ 401.
     // In local demo mode it falls back to the client value or the default.
@@ -126,7 +129,7 @@ export const handlers = {
       // response cache: a cache hit would `return` before the agent runs, so the
       // checkout tool would never fire and no approval card would appear. Cheap
       // lexical guard — the workflow itself validates the cart, this only routes.
-      const looksLikeCheckout = /\b(check\s?out|place (my |an )?order|buy (it|my|now)|purchase)\b/i.test(body.message);
+      const looksLikeCheckout = /\b(check\s?out|place (my |an )?order|buy (it|my|now)|purchase)\b/i.test(message);
 
       // Cache read (fresh-conversation only, fail-open). We only need to know whether the
       // thread is empty (isReadEligible === priorCount 0), so a cheap existence check on the
@@ -144,7 +147,7 @@ export const handlers = {
 
       if (!looksLikeCheckout && cfg.responseCache.enabled && isReadEligible(priorCount)) {
         let hit = null as Awaited<ReturnType<SemanticResponseCache['lookup']>>;
-        try { hit = await rc.cache.lookup(body.message, userId, model); }
+        try { hit = await rc.cache.lookup(message, userId, model); }
         catch (err) { logger.warn('cache lookup failed; bypassing', { err: String(err), correlationId }); }
         if (hit) {
           // correlation already written above.
@@ -152,7 +155,7 @@ export const handlers = {
           await honoStream.write(serializeFrame('done', ''));
           // Persist the exchange so a follow-up is no longer "fresh" and has history.
           try { await memory.saveMessages({ messages: [
-            { role: 'user', content: body.message, threadId, resourceId: userId } as any,
+            { role: 'user', content: message, threadId, resourceId: userId } as any,
             { role: 'assistant', content: hit.answer, threadId, resourceId: userId } as any,
           ] }); } catch (err) { logger.warn('cache-hit persist failed', { err: String(err), correlationId }); }
           return;
@@ -161,11 +164,12 @@ export const handlers = {
 
       // Miss: run the agent and adapt its stream to Cartsmith frames.
       const answerParts: string[] = [];
-      // Set if the agent stream yields an `error` part (toCartsmithFrames emits an `error`
-      // terminal and stops). A turn that errored produced only a PARTIAL answer, so it must
-      // never be written to the cache — otherwise the truncated text could later be served
-      // as a confident cache hit for the same opener (reviewer finding #6).
-      let streamErrored = false;
+      // Set to true unless a `done` terminal is reached (R2 #2). A turn that errored — via an
+      // `error` part OR a THROW while creating/iterating the stream — produced only a PARTIAL
+      // answer, so it must never be written to the cache, or the truncated text could later be
+      // served as a confident cache hit for the same opener. Default true so a stream that
+      // never terminates cleanly is treated as errored for cache purposes.
+      let streamErrored = true;
       const temp = temperatureFor(model);
       // maxSteps gives the concierge router room to delegate to a specialist AND then
       // compose a grounded reply from what the specialist returned. Without it, a turn
@@ -175,11 +179,13 @@ export const handlers = {
       // pattern documents this: a supervisor needs an explicit step budget.
       const streamOpts: any = { memory: { thread: threadId, resource: userId }, maxOutputTokens: maxTokensFor(model), maxSteps: 8 };
       if (temp !== undefined) streamOpts.temperature = temp;
-      const agentStream = await agent.stream(body.message, streamOpts);
+      // Create the agent stream INSIDE the generator so a throw during stream creation or
+      // iteration is caught by toCartsmithFrames' try/catch and turned into an `error` +
+      // (nothing after) terminal — never a 200 stream with only a correlation frame (R2 #1).
       async function* parts(): AsyncGenerator<StreamPart> {
+        const agentStream = await agent.stream(message, streamOpts);
         for await (const part of agentStream.fullStream as AsyncIterable<StreamPart>) {
           if (part.type === 'text-delta') answerParts.push(field<string>(part, 'text') ?? field<string>(part, 'delta') ?? '');
-          if (part.type === 'error') streamErrored = true;
           yield part;
         }
       }
@@ -209,14 +215,19 @@ export const handlers = {
           yield serializeFrame('token', `\n\nI couldn't start checkout: ${reason}`);
         }
       }
-      for await (const frame of toCartsmithFrames(parts(), { correlationId, emitPlanFrames: cfg.emitPlanFrames, beforeDone: checkoutTrailer, skipCorrelation: true })) {
+      for await (const frame of toCartsmithFrames(parts(), {
+        correlationId, emitPlanFrames: cfg.emitPlanFrames, beforeDone: checkoutTrailer, skipCorrelation: true,
+        // Authoritative terminal signal: covers both `error` parts and thrown streams (the
+        // throw path an in-loop flag alone would miss). Only a clean `done` clears the flag.
+        onTerminal: kind => { streamErrored = kind !== 'done'; },
+      })) {
         await honoStream.write(frame);
       }
 
       // Cache write (grounded + non-dataQuery + non-mutating). A checkout turn is
       // mutating, so `isWriteEligible` is false — but guard explicitly too (INV-003).
       if (!streamErrored && !looksLikeCheckout && !turn.checkoutRequested && cfg.responseCache.enabled && isReadEligible(priorCount) && isWriteEligible(turn.signals) && answerParts.length) {
-        try { await rc.cache.save(body.message, userId, model, answerParts.join(''), new Date()); }
+        try { await rc.cache.save(message, userId, model, answerParts.join(''), new Date()); }
         catch (err) { logger.warn('cache save failed', { err: String(err), correlationId }); }
       }
     });
@@ -334,10 +345,15 @@ export const handlers = {
     let body: Partial<FeedbackRequest>;
     try { body = await c.req.json<Partial<FeedbackRequest>>(); }
     catch { return c.body(null, 400); }
-    if (!body || typeof body.run_id !== 'string' || typeof body.user_id !== 'string' || typeof body.score !== 'number') {
+    if (!body || typeof body.run_id !== 'string' || typeof body.score !== 'number') {
       return c.body(null, 400);
     }
-    const doc = buildFeedbackDoc(body as FeedbackRequest, new Date());
+    // Server-trusted identity (R2 #3): in SSO mode the feedback is attributed to the
+    // authenticated user and the client-supplied user_id is ignored; unauthenticated ⇒ 401.
+    // In local demo mode it falls back to the client value or the default (unchanged).
+    const who = await resolveUserId(c, rc.cfg, body.user_id);
+    if ('unauthorized' in who) return c.body(null, 401);
+    const doc = buildFeedbackDoc({ ...(body as FeedbackRequest), user_id: who.userId }, new Date());
     // `_id` is the run_id string (not an ObjectId), so type the collection loosely.
     const collection = rc.feedbackCollection ?? (rc.db.collection('feedback') as any);
     try {

@@ -52,6 +52,12 @@ export async function* toCartsmithFrames(
      * just satisfied by the caller instead of here.
      */
     skipCorrelation?: boolean;
+    /**
+     * Reports which terminal frame was emitted: 'error' (from an `error` part OR a thrown
+     * stream) or 'done' (success). The caller uses this to gate the response-cache write —
+     * catching the THROW path, which an in-loop `error`-part flag alone would miss.
+     */
+    onTerminal?: (kind: 'done' | 'error') => void;
   },
 ): AsyncGenerator<string> {
   if (!opts.skipCorrelation) yield serializeFrame('correlation', opts.correlationId);
@@ -87,6 +93,7 @@ export async function* toCartsmithFrames(
         }
         case 'error': {
           terminated = true;
+          opts.onTerminal?.('error');
           yield serializeFrame('error', String(field(part, 'error') ?? field(part, 'message') ?? 'stream error'));
           return;
         }
@@ -104,9 +111,11 @@ export async function* toCartsmithFrames(
       for await (const frame of opts.beforeDone()) yield frame;
     }
     terminated = true;
+    opts.onTerminal?.('done');
     yield serializeFrame('done', '');
   } catch (err) {
     if (!terminated) {
+      opts.onTerminal?.('error');
       yield serializeFrame('error', err instanceof Error ? err.message : 'stream error');
     }
   }

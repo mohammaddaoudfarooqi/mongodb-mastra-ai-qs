@@ -159,6 +159,69 @@ describe('handlers.chat (REQ-E-004 / boundary #3: SSE streams incrementally)', (
     expect(text).toContain('event: error');   // the stream surfaced the error
     expect(saved.length).toBe(0);              // and nothing was cached
   });
+
+  // R2 #1: malformed JSON must be a 400, not an unhandled 500.
+  it('returns 400 (not 500) for a malformed JSON body', async () => {
+    const res = await chatApp().request('/chat', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: '{ not valid json',
+    });
+    expect(res.status).toBe(400);
+  });
+
+  // R2 #2: a stream that THROWS (not an explicit error part) must emit an error terminal
+  // AND not cache the partial answer. The pre-fix code only caught `error` parts.
+  it('emits an error terminal and does NOT cache when the stream THROWS mid-response', async () => {
+    async function* throwingStream() {
+      yield { type: 'tool-result', toolName: 'knowledgeSearch' } as any;
+      yield { type: 'text-delta', text: 'Partial' } as any;
+      throw new Error('iter blew up');
+    }
+    const saved: unknown[] = [];
+    const rc = stubRc({
+      cfg: { ...cfg, responseCache: { ...cfg.responseCache, enabled: true } },
+      db: { collection: () => ({ countDocuments: async () => 0 }) } as unknown as Db,
+      cache: { lookup: async () => null, save: async (...a: unknown[]) => { saved.push(a); } } as any,
+      getSharedDeps: () => ({} as any),
+      buildAgent: (_cfg: Config, turn: any) => {
+        turn.signals.knowledgeSearchRan = true;
+        turn.signals.knowledgeSearchHadResults = true;
+        return { agent: { stream: async () => ({ fullStream: throwingStream() }) }, memory: fakeMemory };
+      },
+    });
+    const app = new Hono();
+    app.post('/chat', handlers.chat(rc));
+    const res = await app.request('/chat', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: 'how long does shipping take?', user_id: 'demo', thread_id: 'demo:new2' }),
+    });
+    const text = await res.text();
+    expect(text).toContain('event: error');
+    expect(saved.length).toBe(0);
+  });
+
+  // R2 #1: a throw while CREATING the agent stream (after correlation is written) must still
+  // produce an error terminal — never a 200 stream with only a correlation frame.
+  it('emits an error terminal when agent.stream() throws after correlation', async () => {
+    const rc = stubRc({
+      cfg: { ...cfg, responseCache: { ...cfg.responseCache, enabled: false } },
+      getSharedDeps: () => ({} as any),
+      buildAgent: () => ({
+        agent: { stream: async () => { throw new Error('stream creation failed'); } },
+        memory: fakeMemory,
+      }),
+    });
+    const app = new Hono();
+    app.post('/chat', handlers.chat(rc));
+    const res = await app.request('/chat', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: 'hi', user_id: 'demo', thread_id: 't1' }),
+    });
+    expect(res.status).toBe(200); // SSE already opened; error is conveyed as a frame
+    const text = await res.text();
+    expect(text).toContain('event: correlation');
+    expect(text).toContain('event: error');
+  });
 });
 
 describe('auth enforcement on identity-bearing routes (reviewer finding #1)', () => {
@@ -203,6 +266,35 @@ describe('auth enforcement on identity-bearing routes (reviewer finding #1)', ()
     const res = await app.request('/cart?user_id=alice');
     expect(res.status).toBe(200);
     expect(queriedUserId).toBe('alice');
+  });
+
+  // R2 #3: /feedback must also be auth-gated in SSO mode.
+  it('SSO mode: /feedback is 401 without an authenticated session', async () => {
+    const rc = stubRc({ cfg: { ...cfg, authMode: 'sso', authRequired: true } as Config });
+    const app = new Hono();
+    app.post('/feedback', handlers.feedback(rc));
+    const res = await app.request('/feedback', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ run_id: 't1', score: 1, user_id: 'attacker' }),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it('SSO mode: /feedback attributes to the authenticated user, ignoring body.user_id', async () => {
+    registerAuthenticator(() => ({ userId: 'real@corp' }));
+    const writes: any[] = [];
+    const rc = stubRc({
+      cfg: { ...cfg, authMode: 'sso', authRequired: true } as Config,
+      feedbackCollection: { replaceOne: async (_f: any, doc: any) => { writes.push(doc); return {}; } },
+    });
+    const app = new Hono();
+    app.post('/feedback', handlers.feedback(rc));
+    const res = await app.request('/feedback', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ run_id: 't1', score: 1, user_id: 'attacker' }),
+    });
+    expect(res.status).toBe(204);
+    expect(writes[0].user_id).toBe('real@corp'); // not "attacker"
   });
 });
 
