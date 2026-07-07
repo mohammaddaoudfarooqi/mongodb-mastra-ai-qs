@@ -17,60 +17,19 @@ The story this app tells: **Mastra** supplies the agent, tools, memory, and dura
 **MongoDB Atlas** is the single backbone underneath all of it. No second datastore, no bolt-on
 vector database, no separate cache. One cluster plays six roles.
 
-```mermaid
-flowchart TB
-    subgraph Mastra["Mastra — agents & orchestration"]
-        C["Concierge agent<br/>(knowledgeSearch tool)"]
-        S["dealsAndCart specialist<br/>(dataQuery · cart · checkout)"]
-        W["place-order workflow<br/>(suspend / resume, HITL)"]
-        C -->|delegates| S
-        C -->|starts| W
-    end
+### Architecture
 
-    subgraph Voyage["Voyage AI"]
-        E["Multimodal embeddings<br/>+ reranker"]
-    end
-
-    subgraph Atlas["MongoDB Atlas — one cluster, six roles"]
-        D1["products / orders / promotions<br/>operational data"]
-        D2["knowledge_base<br/>vector + text search"]
-        D3["mastra_messages / threads<br/>agent memory"]
-        D4["semantic_response_cache<br/>vector + TTL"]
-        D5["orders + products.stock<br/>ACID transactions"]
-        D6["mastra_workflow_snapshot<br/>suspend / resume state"]
-    end
-
-    C --> E
-    C --> D2
-    C --> D3
-    C --> D4
-    S --> D1
-    S --> E
-    W --> D5
-    W --> D6
-```
+<p align="center">
+  <img src="./frontend/public/architecture.png" width="768" alt="Architecture">
+</p>
 
 Runtime path of a single turn:
 
-```mermaid
-sequenceDiagram
-    participant U as Shopper (React SPA)
-    participant A as Mastra concierge
-    participant M as MongoDB Atlas
-    participant V as Voyage AI
+### Control Flow
 
-    U->>A: POST /api/chat (SSE)
-    A->>M: recall thread + resource memory
-    A->>V: embed query
-    A->>M: hybrid search (vector + text) on knowledge_base
-    A->>V: rerank candidates
-    A-->>U: stream grounded answer (tokens)
-    Note over U,A: "check out" → concierge delegates to dealsAndCart → starts place-order
-    A-->>U: interrupt frame (approval card)
-    U->>A: POST /api/interrupts/resume (approve)
-    A->>M: ONE transaction: write order · decrement stock · clear cart
-    A-->>U: confirmation + done
-```
+<p align="center">
+  <img src="./frontend/public/flow.png" width="768" alt="Control Flow">
+</p>
 
 ## Quick start (Docker + Studio, one command)
 
