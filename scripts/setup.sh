@@ -116,7 +116,7 @@ done
 if [ "$ALL_READY" = false ]; then
   echo ""
   echo "⚠️  Not all services came up in time. Check:"
-  echo "    • App logs:    docker compose logs -f backend"
+  echo "    • App logs:    docker compose logs -f app"
   echo "    • Studio logs: tail -f .mastra-studio.log"
   echo "    Manual URLs: $APP_URL · $STUDIO_URL · $SWAGGER_URL"
 fi

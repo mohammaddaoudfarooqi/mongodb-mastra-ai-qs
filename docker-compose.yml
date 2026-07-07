@@ -15,7 +15,7 @@
 # MONGODB_URI must point at your cluster.
 
 services:
-  backend:
+  app:
     build:
       context: .
       dockerfile: Dockerfile
