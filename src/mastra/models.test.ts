@@ -32,9 +32,9 @@ describe('model helpers', () => {
 });
 
 describe('modelChoices (GET /models catalog)', () => {
-  it('offers haiku-4-5, sonnet-4-6, and opus-4-8', () => {
+  it('offers sonnet-4-6 (default, first), haiku-4-5, and opus-4-8', () => {
     const ids = MODEL_CATALOG.map(m => m.id);
-    expect(ids).toEqual(['claude-haiku-4-5', 'claude-sonnet-4-6', 'claude-opus-4-8']);
+    expect(ids).toEqual(['claude-sonnet-4-6', 'claude-haiku-4-5', 'claude-opus-4-8']);
   });
 
   it('lists the configured default first with no duplicate', () => {

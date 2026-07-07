@@ -28,14 +28,15 @@ export interface ModelChoice { id: string; label: string; }
 
 /**
  * Models offered in the storefront's model picker. All three are verified against the
- * gateway this quickstart targets: haiku-4-5 (fast, the default), opus-4-8 (deepest
- * reasoning), and sonnet-4-6 (the balance point — the latest Sonnet the gateway serves).
- * The configured `cfg.llmModel` is always included even if it is not in this list, so a
- * custom deployment's default never disappears from the picker.
+ * gateway this quickstart targets: sonnet-4-6 (balanced — the demo default), haiku-4-5
+ * (faster/cheaper), and opus-4-8 (deepest reasoning). Sonnet is the default because it is
+ * far more reliable than haiku on the grounded tool/agent beats (item selection, retrieval
+ * grounding) without opus's latency. The configured `cfg.llmModel` is always included even
+ * if it is not in this list, so a custom deployment's default never disappears from the picker.
  */
 export const MODEL_CATALOG: ModelChoice[] = [
-  { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5 (fast)' },
   { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6 (balanced)' },
+  { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5 (fast)' },
   { id: 'claude-opus-4-8', label: 'Claude Opus 4.8 (deep)' },
 ];
 
