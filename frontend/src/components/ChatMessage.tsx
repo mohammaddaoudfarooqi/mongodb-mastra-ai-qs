@@ -1,8 +1,28 @@
 import React, { useCallback, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Message } from '../context/ChatContext';
 import { useChat } from '../context/ChatContext';
+
+/**
+ * URL policy for assistant-rendered markdown. The assistant's output is model-controlled,
+ * so a reply containing `![x](https://evil/pixel.png)` would otherwise make the browser
+ * fetch a third-party host (tracking / data exfiltration via URL). This runs on top of
+ * react-markdown's own defaultUrlTransform (which already strips dangerous schemes like
+ * javascript:) and additionally blocks ALL images and non-safe link schemes
+ * (reviewer finding #11). Returning '' drops the URL so nothing is requested.
+ */
+function safeUrlTransform(url: string, key: string, node: { tagName?: string }): string {
+  const cleaned = defaultUrlTransform(url);
+  // Block every image src: an <img> auto-fires a request on render.
+  if (node?.tagName === 'img' || key === 'src') return '';
+  // Links: allow only in-page anchors and http(s)/mailto the user must click.
+  if (key === 'href') {
+    if (/^(https?:|mailto:|#|\/)/i.test(cleaned)) return cleaned;
+    return '';
+  }
+  return cleaned;
+}
 
 interface Props {
   message: Message;
@@ -169,7 +189,10 @@ const ChatMessage: React.FC<Props> = React.memo(({ message }) => {
           <div className="chat-markdown">
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
-              components={{ code: renderCode }}
+              urlTransform={safeUrlTransform}
+              // Never render model-supplied images: drop them to their alt text so no
+              // external request is ever made (defense in depth with urlTransform).
+              components={{ code: renderCode, img: ({ alt }) => <>{alt ?? ''}</> }}
             >
               {balanceCodeFences(message.content || (isError ? '' : '…'))}
             </ReactMarkdown>

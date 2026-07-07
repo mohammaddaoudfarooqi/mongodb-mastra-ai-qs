@@ -7,7 +7,7 @@ import React, {
 import { useChat } from '../context/ChatContext';
 import ChatMessage from './ChatMessage';
 import { MastraMark } from './brand';
-import type { CartResponse, Todo } from '../api/client';
+import type { CartResponse, InterruptEvent, Todo } from '../api/client';
 
 /* ── small helpers ─────────────────────────────────────────────────────── */
 function formatUsd(n: number): string {
@@ -296,6 +296,86 @@ function CartSection({ cart }: { cart: CartResponse | null }) {
   );
 }
 
+/* ── Checkout approval (HITL) ──────────────────────────────────────────── */
+/** Rendered when the order workflow suspends for approval. Reads the pending
+ *  interrupt and drives approve/reject via the ChatContext resume flow. */
+function ApprovalCard({
+  interrupt,
+  disabled,
+  onApprove,
+  onReject,
+}: {
+  interrupt: InterruptEvent;
+  disabled: boolean;
+  onApprove: () => void;
+  onReject: () => void;
+}) {
+  const args = interrupt.action?.args as { total_usd?: number; lines?: unknown[] } | undefined;
+  const total = typeof args?.total_usd === 'number' ? args.total_usd : undefined;
+  const itemCount = Array.isArray(args?.lines) ? args!.lines!.length : undefined;
+
+  const btn = (bg: string, border: string, color: string): React.CSSProperties => ({
+    flex: 1,
+    padding: '8px 10px',
+    fontFamily: 'var(--font-mono)',
+    fontSize: 12,
+    fontWeight: 600,
+    color,
+    background: bg,
+    border: `1px solid ${border}`,
+    borderRadius: 'var(--radius-md)',
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    opacity: disabled ? 0.5 : 1,
+  });
+
+  return (
+    <div
+      style={{
+        borderTop: '1px solid var(--border)',
+        padding: '10px 14px',
+        background: 'rgba(0,237,100,0.05)',
+      }}
+    >
+      <div
+        style={{
+          fontFamily: 'var(--font-mono)',
+          fontSize: 10,
+          textTransform: 'uppercase',
+          letterSpacing: '1px',
+          color: 'var(--spring-green)',
+          marginBottom: 6,
+        }}
+      >
+        ✓ Approve order
+      </div>
+      <div style={{ fontSize: 13, color: 'var(--text)', marginBottom: 10 }}>
+        {interrupt.action?.description ??
+          `Place order${itemCount != null ? ` for ${itemCount} item(s)` : ''}${
+            total != null ? `, total ${formatUsd(total)}` : ''
+          }.`}
+      </div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={onApprove}
+          style={btn('var(--green-tint)', 'var(--green-border)', 'var(--spring-green)')}
+        >
+          Approve
+        </button>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={onReject}
+          style={btn('rgba(255,255,255,0.03)', 'var(--border)', 'var(--text-secondary)')}
+        >
+          Reject
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /* ── Panel ─────────────────────────────────────────────────────────────── */
 function Panel() {
   const {
@@ -305,6 +385,9 @@ function Panel() {
     plan,
     cart,
     userId,
+    pendingInterrupt,
+    approveCheckout,
+    rejectCheckout,
     sendMessage,
     newConversation,
     setOpen,
@@ -520,7 +603,16 @@ function Panel() {
       {/* Cart */}
       <CartSection cart={cart} />
 
-      {/* Files Saved + checkout HITL removed: dropped features in this port (backend 204s) */}
+      {/* Checkout approval (HITL): shown when the order workflow suspends for the
+          shopper's decision. Drives the /api/interrupts/resume flow via ChatContext. */}
+      {pendingInterrupt && (
+        <ApprovalCard
+          interrupt={pendingInterrupt}
+          disabled={isLoading}
+          onApprove={approveCheckout}
+          onReject={() => rejectCheckout()}
+        />
+      )}
 
       {/* Input */}
       <form
