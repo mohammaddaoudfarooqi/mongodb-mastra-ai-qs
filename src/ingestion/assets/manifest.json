@@ -1,0 +1,11 @@
+{
+  "assets": [
+    { "file": "mug-red.png", "title": "Red ceramic mug", "source": "catalog", "mediaType": "image",
+      "extractedText": "12 oz red ceramic coffee mug, dishwasher safe" },
+    { "file": "tshirt-blue.png", "title": "Blue cotton t-shirt", "source": "catalog", "mediaType": "image",
+      "extractedText": "100 percent cotton crew-neck t-shirt in navy blue" },
+    { "file": "pamphlet-summer-sale.png", "title": "Summer sale pamphlet", "source": "marketing", "mediaType": "image",
+      "extractedText": "Summer sale: up to 30 percent off outdoor and kitchen categories through August" },
+    { "file": "catalog.pdf", "title": "Summer 2026 catalog", "source": "marketing", "mediaType": "pdf" }
+  ]
+}

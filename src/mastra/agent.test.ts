@@ -1,0 +1,52 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { Config } from '../config';
+
+const cfg = {
+  mongoUri: 'mongodb+srv://u:p@c.mongodb.net/', mongoDb: 'db', voyageApiKey: 'vk',
+  llmProvider: 'anthropic', llmModel: 'claude-opus-4-8', allowInsecure: false,
+  responseCache: { enabled: true, ttlDays: 1, similarityThreshold: 0.9, maxAnswerBytes: 32768 },
+  rrfK: 60, dataAgentAllowList: ['products', 'orders', 'promotions'], dataAgentLimit: 25,
+  emitPlanFrames: false, ingestDescribe: true, port: 8000, defaultUserId: 'demo',
+  mongoPool: { maxPoolSize: 100, minPoolSize: 10 },
+} as Config;
+
+describe('buildConcierge', () => {
+  const turn = () => ({ signals: { knowledgeSearchRan: false, knowledgeSearchHadResults: false, dataQueryRan: false, mutatingToolRan: false } });
+
+  it('returns a concierge router with the dealsAndCart sub-agent and a direct knowledgeSearch tool', async () => {
+    const { buildConcierge } = await import('./agent');
+    const { agent } = buildConcierge(cfg, turn());
+    expect(agent).toBeDefined();
+    expect(agent.id).toBe('concierge');
+    // dealsAndCart stays a native sub-agent (exposed via __getStaticAgents); knowledge
+    // retrieval is a DIRECT router tool so the answering LLM reads the hits itself
+    // (no empty-sub-agent-text boundary — see the KB retrieval fix).
+    const subs = (agent as any).__getStaticAgents();
+    expect(Object.keys(subs)).toEqual(['dealsAndCart']);
+    const tools = await (agent as any).listTools();
+    expect(Object.keys(tools)).toContain('knowledgeSearch');
+  });
+
+  it('threads the turn signal bag rather than defaulting it away', async () => {
+    const { buildConcierge } = await import('./agent');
+    const t = turn();
+    buildConcierge(cfg, t);
+    expect(t.signals.knowledgeSearchRan).toBe(false);
+  });
+
+  it('gives the dealsAndCart specialist a checkout tool to trigger the order workflow', async () => {
+    const { buildConcierge } = await import('./agent');
+    const { agent } = buildConcierge(cfg, turn());
+    const subs = (agent as any).__getStaticAgents();
+    const tools = await (subs.dealsAndCart as any).listTools();
+    expect(Object.keys(tools)).toContain('checkout');
+  });
+
+  it('configures resource-scoped recall and working memory on the router memory', async () => {
+    const { buildConcierge } = await import('./agent');
+    const { memory } = buildConcierge(cfg, turn());
+    const resolved = (memory as any).getMergedThreadConfig();
+    expect(resolved.semanticRecall).toMatchObject({ scope: 'resource' });
+    expect(resolved.workingMemory).toMatchObject({ enabled: true, scope: 'resource' });
+  });
+});

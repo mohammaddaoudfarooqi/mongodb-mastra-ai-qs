@@ -1,0 +1,53 @@
+# One-command self-hosted run of the concierge (API + storefront SPA on one
+# origin), against a MongoDB Atlas cluster. This mirrors the Mastra Cloud
+# deploy: the same `mastra build` artifact runs here in a container.
+#
+# Usage:
+#   cp .env.example .env   # fill in MONGODB_URI, VOYAGE_API_KEY, LLM creds, …
+#   docker compose up --build
+#   # then, once, against Atlas (not part of the image build):
+#   pnpm provision && pnpm seed && pnpm embed
+#
+# Optional: also run Mastra Studio (dev UI on :4111) in a container:
+#   docker compose --profile studio up --build
+#
+# No Mongo service here on purpose: the app targets Atlas (vector search), so
+# MONGODB_URI must point at your cluster.
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mongodb-mastra-concierge:latest
+    env_file: .env
+    environment:
+      PORT: "8000"
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8000/api/health"]
+      interval: 30s
+      timeout: 4s
+      start_period: 20s
+      retries: 3
+    restart: unless-stopped
+
+  # Mastra Studio: the dev/observability UI (visual workflow runner, agent traces,
+  # tool inspection) on :4111. Opt-in — it only starts under the `studio` profile,
+  # so a plain `docker compose up` runs just the production app. It builds the
+  # `studio` Dockerfile stage (source + dev deps), which is NOT the deployable
+  # artifact; keep it for demos and debugging, not production.
+  studio:
+    profiles: ["studio"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: studio
+    image: mongodb-mastra-concierge-studio:latest
+    env_file: .env
+    environment:
+      PORT: "4111"
+    ports:
+      - "4111:4111"
+    restart: unless-stopped

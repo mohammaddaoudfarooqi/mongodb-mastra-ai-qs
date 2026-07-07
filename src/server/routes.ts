@@ -1,0 +1,303 @@
+import type { Context } from 'hono';
+import { stream } from 'hono/streaming';
+import { MongoClient, type Db } from 'mongodb';
+import type { Config } from '../config';
+import { logger } from '../observability/logger';
+import { toCartsmithFrames, serializeFrame, field, type StreamPart } from './sse';
+import { projectMessage } from './projection';
+import { buildConcierge, buildConciergeDeps, type TurnContext, type ConciergeDeps } from '../mastra/agent';
+import { computeCartTotals, type CartLine } from '../mastra/tools/cart';
+import { SemanticResponseCache } from '../cache/semantic-response-cache';
+import { isReadEligible, isWriteEligible } from '../cache/cache-decisions';
+import { getQueryEmbedder } from '../mastra/embed';
+import { maxTokensFor, temperatureFor, modelChoices } from '../mastra/models';
+import { buildFeedbackDoc, type FeedbackRequest } from './feedback';
+
+function freshSignals(): TurnContext['signals'] {
+  return { knowledgeSearchRan: false, knowledgeSearchHadResults: false, dataQueryRan: false, mutatingToolRan: false };
+}
+
+/**
+ * Per-app dependencies shared by every route handler. Owns the MongoClient,
+ * the semantic cache, and a lazily-built ConciergeDeps (connection reuse).
+ *
+ * Construction is connection-free (MongoClient/MongoDBStore connect lazily),
+ * so building a RouteContext performs NO network I/O and NO seeding — this is
+ * what lets the handlers mount on both `createApp` (Hono) and the Mastra
+ * instance (Cloud) without opening a socket at import time (REQ-E-011).
+ */
+/**
+ * Starts and resumes the human-in-the-loop order workflow. Abstracted behind
+ * this seam so route handlers stay unit-testable without a live Mongo/Mastra;
+ * the real implementation (storage-bound workflow) is injected in production and
+ * exercised by the live integration test. `start`/`resume` are keyed by the
+ * composite `threadId` (a deterministic runId), so a run suspended in the /chat
+ * request is recoverable in the separate /interrupts/resume request (REQ-E-035).
+ */
+export interface OrderRunner {
+  start: (threadId: string, userId: string) => Promise<{ status: string; suspendPayload?: any }>;
+  resume: (threadId: string, decision: string, editedAction?: any) => Promise<{ status: string; message?: string }>;
+}
+
+export interface RouteContext {
+  cfg: Config;
+  db: Db;
+  cache: SemanticResponseCache;
+  getSharedDeps: () => ConciergeDeps;
+  nextCorrelationId: () => string;
+  /** Injected order-workflow runner; absent in hermetic tests that don't hit checkout. */
+  orderRunner?: OrderRunner;
+  /** Test seam: overrides db.collection('feedback') when present (see app.test.ts). */
+  feedbackCollection?: { replaceOne: (...args: any[]) => Promise<unknown> };
+  /** Test seam: overrides the agent/memory builder so the /chat SSE path can be
+   *  exercised without a live LLM (defaults to buildConcierge). */
+  buildAgent?: (cfg: Config, turn: TurnContext, deps: ConciergeDeps) => { agent: any; memory: any };
+}
+
+export function buildRouteContext(cfg: Config): RouteContext {
+  const client = new MongoClient(cfg.mongoUri, {
+    maxPoolSize: cfg.mongoPool.maxPoolSize,
+    minPoolSize: cfg.mongoPool.minPoolSize,
+  });
+  const db = client.db(cfg.mongoDb);
+  const cacheCol = db.collection('semantic_response_cache');
+  const queryEmbedder = getQueryEmbedder(cfg);
+  const cache = new SemanticResponseCache({
+    collection: cacheCol,
+    embed: q => queryEmbedder.embedQuery(q),
+    cfg: cfg.responseCache,
+  });
+
+  // Shared connection-holding deps, built lazily on first /chat use (preserves
+  // the no-connection-at-construction property the smoke tests rely on).
+  let sharedDeps: ConciergeDeps | null = null;
+  const getSharedDeps = () => { if (!sharedDeps) sharedDeps = buildConciergeDeps(cfg); return sharedDeps; };
+
+  // A per-turn correlation id without Math.random/Date: monotonic counter + pid.
+  let turnSeq = 0;
+  const nextCorrelationId = () => `turn-${process.pid}-${++turnSeq}`;
+
+  return {
+    cfg, db, cache, getSharedDeps, nextCorrelationId,
+    feedbackCollection: (cfg as any).__testFeedbackCollection,
+  };
+}
+
+/**
+ * Route handlers, each a `(RouteContext) => (Context) => Response` factory. The
+ * SAME functions mount on the Hono app (`createApp`) and the Mastra instance's
+ * `server.apiRoutes`, so the two deploy surfaces cannot drift (REQ-E-001).
+ *
+ * Handlers read from the request body / query, never from the URL path, so the
+ * identical function serves `/chat` (createApp) and `/api/chat` (Mastra).
+ */
+export const handlers = {
+  chat: (rc: RouteContext) => async (c: Context): Promise<Response> => {
+    const cfg = rc.cfg;
+    const body = await c.req.json<{ user_id?: string; thread_id?: string; message: string; model?: string }>();
+    const userId = body.user_id || cfg.defaultUserId;
+    const threadId = body.thread_id || `${userId}:default`;
+    const model = body.model || cfg.llmModel;
+    const correlationId = rc.nextCorrelationId();
+    const turn: TurnContext = { signals: freshSignals(), modelOverride: body.model, userId, threadId };
+    const deps = rc.getSharedDeps();
+    const { agent, memory } = (rc.buildAgent ?? buildConcierge)(cfg, turn, deps);
+
+    return stream(c, async honoStream => {
+      c.header('Content-Type', 'text/event-stream');
+
+      // A checkout-intent message must never be served from (or written to) the
+      // response cache: a cache hit would `return` before the agent runs, so the
+      // checkout tool would never fire and no approval card would appear. Cheap
+      // lexical guard — the workflow itself validates the cart, this only routes.
+      const looksLikeCheckout = /\b(check\s?out|place (my |an )?order|buy (it|my|now)|purchase)\b/i.test(body.message);
+
+      // Cache read (fresh-conversation only, fail-open).
+      let priorCount = 0;
+      try {
+        const prior = await memory.recall({ threadId, resourceId: userId });
+        priorCount = prior?.messages?.length ?? 0;
+      } catch (err) { logger.warn('memory.recall failed; bypassing cache', { err: String(err), correlationId }); priorCount = 1; }
+
+      if (!looksLikeCheckout && cfg.responseCache.enabled && isReadEligible(priorCount)) {
+        let hit = null as Awaited<ReturnType<SemanticResponseCache['lookup']>>;
+        try { hit = await rc.cache.lookup(body.message, userId, model); }
+        catch (err) { logger.warn('cache lookup failed; bypassing', { err: String(err), correlationId }); }
+        if (hit) {
+          await honoStream.write(serializeFrame('correlation', correlationId));
+          await honoStream.write(serializeFrame('token', hit.answer));
+          await honoStream.write(serializeFrame('done', ''));
+          // Persist the exchange so a follow-up is no longer "fresh" and has history.
+          try { await memory.saveMessages({ messages: [
+            { role: 'user', content: body.message, threadId, resourceId: userId } as any,
+            { role: 'assistant', content: hit.answer, threadId, resourceId: userId } as any,
+          ] }); } catch (err) { logger.warn('cache-hit persist failed', { err: String(err), correlationId }); }
+          return;
+        }
+      }
+
+      // Miss: run the agent and adapt its stream to Cartsmith frames.
+      const answerParts: string[] = [];
+      const temp = temperatureFor(model);
+      // maxSteps gives the concierge router room to delegate to a specialist AND then
+      // compose a grounded reply from what the specialist returned. Without it, a turn
+      // that delegates (and may retry the sub-agent once) can exhaust the default step
+      // budget before writing the final answer, producing a false "having trouble
+      // retrieving" hedge even though the specialist returned data. Mastra's supervisor
+      // pattern documents this: a supervisor needs an explicit step budget.
+      const streamOpts: any = { memory: { thread: threadId, resource: userId }, maxOutputTokens: maxTokensFor(model), maxSteps: 8 };
+      if (temp !== undefined) streamOpts.temperature = temp;
+      const agentStream = await agent.stream(body.message, streamOpts);
+      async function* parts(): AsyncGenerator<StreamPart> {
+        for await (const part of agentStream.fullStream as AsyncIterable<StreamPart>) {
+          if (part.type === 'text-delta') answerParts.push(field<string>(part, 'text') ?? field<string>(part, 'delta') ?? '');
+          yield part;
+        }
+      }
+      // If the agent asked to check out, start the order workflow as a `beforeDone`
+      // trailer: the interrupt/token frames it yields are emitted right before the
+      // `done` terminal, and ONLY on the success path — never after an `error` (so
+      // the INV-002 "interrupt always followed by done" contract holds without this
+      // handler parsing sse.ts's wire format). No workflow starts on an errored turn.
+      async function* checkoutTrailer(): AsyncGenerator<string> {
+        if (!turn.checkoutRequested || !rc.orderRunner) return;
+        try {
+          const run = await rc.orderRunner.start(threadId, userId);
+          if (run.status === 'suspended' && run.suspendPayload) {
+            yield serializeFrame('interrupt', JSON.stringify({
+              thread_id: threadId,
+              action: run.suspendPayload.action,
+              allowed_decisions: run.suspendPayload.allowed_decisions,
+            }));
+          } else {
+            // Not suspended = buildQuote bailed pre-approval (empty cart / stock).
+            yield serializeFrame('token', "\n\nI couldn't start checkout — your cart may be empty or an item is out of stock. Please review your cart and try again.");
+          }
+        } catch (err) {
+          // buildQuote throws on empty cart / insufficient stock (REQ-E-034); surface it.
+          const reason = err instanceof Error ? err.message : 'Checkout could not be started.';
+          logger.warn('checkout start failed', { err: String(err), correlationId });
+          yield serializeFrame('token', `\n\nI couldn't start checkout: ${reason}`);
+        }
+      }
+      for await (const frame of toCartsmithFrames(parts(), { correlationId, emitPlanFrames: cfg.emitPlanFrames, beforeDone: checkoutTrailer })) {
+        await honoStream.write(frame);
+      }
+
+      // Cache write (grounded + non-dataQuery + non-mutating). A checkout turn is
+      // mutating, so `isWriteEligible` is false — but guard explicitly too (INV-003).
+      if (!looksLikeCheckout && !turn.checkoutRequested && cfg.responseCache.enabled && isReadEligible(priorCount) && isWriteEligible(turn.signals) && answerParts.length) {
+        try { await rc.cache.save(body.message, userId, model, answerParts.join(''), new Date()); }
+        catch (err) { logger.warn('cache save failed', { err: String(err), correlationId }); }
+      }
+    });
+  },
+
+  models: (rc: RouteContext) => (c: Context): Response => c.json({
+    default: rc.cfg.llmModel,
+    models: modelChoices(rc.cfg.llmModel),
+  }),
+
+  // Auth stub: the vendored frontend's AuthProvider calls GET /auth/me on mount
+  // and throws on non-2xx. There is no real SSO here, so return a fixed dev user
+  // derived from config. The frontend shows `email` as a read-only badge and uses
+  // it as `user_id` for memory/thread scoping.
+  authMe: (rc: RouteContext) => (c: Context): Response => c.json({
+    email: rc.cfg.defaultUserId,
+    username: rc.cfg.defaultUserId,
+    groups: [] as string[],
+  }),
+
+  health: () => (c: Context): Response => c.json({ status: 'ok' }),
+
+  stats: (rc: RouteContext) => async (c: Context): Promise<Response> => {
+    try {
+      const products = await rc.db.collection('products').countDocuments();
+      const categories = (await rc.db.collection('products').distinct('category')).length;
+      const on_sale = await rc.db.collection('products').countDocuments({ on_sale: true });
+      return c.json({ products, categories, on_sale });
+    } catch { return c.json({ products: null, categories: null, on_sale: null }); }
+  },
+
+  cart: (rc: RouteContext) => async (c: Context): Promise<Response> => {
+    const userId = c.req.query('user_id') || rc.cfg.defaultUserId;
+    const threadId = c.req.query('thread_id') || `${userId}:default`;
+    try {
+      const doc = await rc.db.collection('carts').findOne({ userId, threadId });
+      const lines = (doc?.lines ?? []) as CartLine[];
+      return c.json({ lines, ...computeCartTotals(lines), updated_at: doc?.updated_at ?? null });
+    } catch { return c.json({ lines: [], subtotal: 0, total_savings: 0, updated_at: null }); }
+  },
+
+  messages: (rc: RouteContext) => async (c: Context): Promise<Response> => {
+    const userId = c.req.query('user_id') || rc.cfg.defaultUserId;
+    const threadId = c.req.query('thread_id');
+    if (!threadId) return c.json({ messages: [] });
+    try {
+      const deps = rc.getSharedDeps();
+      const res = await deps.memory.recall({ threadId, resourceId: userId });
+      const messages = (res?.messages ?? []).map((m: any) => projectMessage({ role: m.role, content: m.content }));
+      return c.json({ messages });
+    } catch { return c.json({ messages: [] }); }
+  },
+
+  latestThread: (rc: RouteContext) => async (c: Context): Promise<Response> => {
+    const userId = c.req.query('user_id') || rc.cfg.defaultUserId;
+    try {
+      const deps = rc.getSharedDeps();
+      const result = await deps.memory.listThreads({ filter: { resourceId: userId } });
+      const threads = result?.threads ?? [];
+      const latest = threads.sort((a: any, b: any) => (b.updatedAt > a.updatedAt ? 1 : -1))[0];
+      return c.json({ thread_id: latest?.id ?? null });
+    } catch { return c.json({ thread_id: null }); }
+  },
+
+  // Dropped feature: 204 (not 404) so the frontend's swallow-to-empty fetcher never toasts/retries.
+  files: () => (c: Context): Response => c.body(null, 204),
+
+  // Revived Spec 530 checkout resume: resume the suspended order workflow for
+  // this thread with the shopper's decision, and stream the confirmation as SSE
+  // (REQ-E-031/032). Fail-open to an `error` frame. `thread_id` is the composite
+  // value echoed verbatim from the interrupt frame.
+  resume: (rc: RouteContext) => async (c: Context): Promise<Response> => {
+    let body: { thread_id?: string; decision?: string; edited_action?: any };
+    try { body = await c.req.json(); } catch { return c.body(null, 400); }
+    const threadId = body.thread_id;
+    const decision = body.decision;
+    if (!threadId || !decision) return c.body(null, 400);
+    const correlationId = rc.nextCorrelationId();
+    return stream(c, async honoStream => {
+      c.header('Content-Type', 'text/event-stream');
+      await honoStream.write(serializeFrame('correlation', correlationId));
+      try {
+        if (!rc.orderRunner) throw new Error('checkout is not configured');
+        const result = await rc.orderRunner.resume(threadId, decision, body.edited_action);
+        const msg = result.message ?? (result.status === 'placed' ? 'Order placed.' : 'Order cancelled.');
+        await honoStream.write(serializeFrame('token', msg));
+        await honoStream.write(serializeFrame('done', ''));
+      } catch (err) {
+        logger.warn('checkout resume failed', { err: String(err), correlationId });
+        await honoStream.write(serializeFrame('error', 'Could not resume checkout.'));
+      }
+    });
+  },
+
+  feedback: (rc: RouteContext) => async (c: Context): Promise<Response> => {
+    let body: Partial<FeedbackRequest>;
+    try { body = await c.req.json<Partial<FeedbackRequest>>(); }
+    catch { return c.body(null, 400); }
+    if (!body || typeof body.run_id !== 'string' || typeof body.user_id !== 'string' || typeof body.score !== 'number') {
+      return c.body(null, 400);
+    }
+    const doc = buildFeedbackDoc(body as FeedbackRequest, new Date());
+    // `_id` is the run_id string (not an ObjectId), so type the collection loosely.
+    const collection = rc.feedbackCollection ?? (rc.db.collection('feedback') as any);
+    try {
+      await collection.replaceOne({ _id: doc._id }, doc, { upsert: true });
+    } catch (err) {
+      // Fail-open: never break the UI over a feedback write.
+      logger.warn('feedback persist failed', { err: String(err), run_id: doc.run_id });
+    }
+    return c.body(null, 204);
+  },
+};

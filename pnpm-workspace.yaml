@@ -1,0 +1,8 @@
+allowBuilds:
+  esbuild: false
+
+# voyageai <=0.2.1 ships broken ESM (directory import of dist/esm/api without
+# /index.mjs) that crashes Node ESM at runtime. @mastra/voyageai@0.3.0 declares
+# ^0.2.1; pin the transitive up to a version with valid ESM exports.
+overrides:
+  voyageai: 0.3.1

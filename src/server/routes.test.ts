@@ -1,0 +1,246 @@
+import { describe, it, expect } from 'vitest';
+import { Hono } from 'hono';
+import type { Db } from 'mongodb';
+import { buildRouteContext, handlers, type RouteContext } from './routes';
+import type { Config } from '../config';
+
+const cfg = {
+  mongoUri: 'mongodb+srv://u:p@c.mongodb.net/', mongoDb: 'db', voyageApiKey: 'vk',
+  llmProvider: 'anthropic', llmModel: 'claude-opus-4-8', allowInsecure: false,
+  responseCache: { enabled: false, ttlDays: 1, similarityThreshold: 0.9, maxAnswerBytes: 32768 },
+  rrfK: 60, dataAgentAllowList: ['products'], dataAgentLimit: 25,
+  emitPlanFrames: false, ingestDescribe: true, port: 8000, defaultUserId: 'demo',
+  mongoPool: { maxPoolSize: 100, minPoolSize: 10 },
+} as Config;
+
+/** A RouteContext with a stubbed db, for hermetic handler tests. */
+function stubRc(over: Partial<RouteContext> = {}): RouteContext {
+  return {
+    cfg,
+    db: { collection: () => ({}) } as unknown as Db,
+    cache: {} as any,
+    getSharedDeps: () => { throw new Error('not needed'); },
+    nextCorrelationId: () => 'turn-test-1',
+    orderRunner: undefined,
+    ...over,
+  };
+}
+
+describe('buildRouteContext (REQ-E-011: connection-free construction)', () => {
+  it('constructs without opening a connection or seeding', () => {
+    // A bogus-but-TLS URI: MongoClient connects lazily, so construction must not throw
+    // and must not perform any network I/O. If it eagerly connected, this would hang/throw.
+    const rc = buildRouteContext(cfg);
+    expect(rc.db).toBeDefined();
+    expect(rc.cache).toBeDefined();
+    expect(typeof rc.nextCorrelationId).toBe('function');
+    // Monotonic correlation ids, no Date/random.
+    expect(rc.nextCorrelationId()).toMatch(/^turn-\d+-\d+$/);
+  });
+
+  it('exposes the __testFeedbackCollection seam from cfg', () => {
+    const fake = { replaceOne: async () => ({ acknowledged: true }) };
+    const rc = buildRouteContext({ ...cfg, __testFeedbackCollection: fake } as any);
+    expect(rc.feedbackCollection).toBe(fake);
+  });
+});
+
+describe('handlers.cart (REQ-E-001 / INV-003: shape via the shared handler)', () => {
+  function appWithCart(doc: any) {
+    const rc = stubRc({
+      db: { collection: () => ({ findOne: async () => doc }) } as unknown as Db,
+    });
+    const app = new Hono();
+    app.get('/cart', handlers.cart(rc));
+    return app;
+  }
+
+  it('derives subtotal/total_savings from lines via computeCartTotals', async () => {
+    const app = appWithCart({
+      lines: [{ product_id: 'p1', name: 'Mug', qty: 2, unit_price_usd: 10, sale_price_usd: 8, applied_coupons: [], line_savings: 4 }],
+      updated_at: null,
+    });
+    const res = await app.request('/cart?user_id=demo&thread_id=t1');
+    expect(res.status).toBe(200);
+    const body = await res.json() as { lines: unknown[]; subtotal: number; total_savings: number; updated_at: null };
+    expect(body.lines.length).toBe(1);
+    expect(body.subtotal).toBe(16);
+    expect(body.total_savings).toBe(4);
+    expect(body.updated_at).toBeNull();
+  });
+
+  it('returns an empty cart shape on db error (fail-open)', async () => {
+    const rc = stubRc({ db: { collection: () => ({ findOne: async () => { throw new Error('down'); } }) } as unknown as Db });
+    const app = new Hono();
+    app.get('/cart', handlers.cart(rc));
+    const res = await app.request('/cart');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ lines: [], subtotal: 0, total_savings: 0, updated_at: null });
+  });
+});
+
+describe('handlers.chat (REQ-E-004 / boundary #3: SSE streams incrementally)', () => {
+  async function* fakeFullStream() {
+    yield { type: 'text-delta', text: 'Hel' } as any;
+    yield { type: 'text-delta', text: 'lo' } as any;
+    yield { type: 'finish' } as any;
+  }
+  const fakeAgent = { stream: async () => ({ fullStream: fakeFullStream() }) };
+  const fakeMemory = {
+    recall: async () => ({ messages: [] }),
+    saveMessages: async () => {},
+  };
+
+  function chatApp() {
+    const rc = stubRc({
+      cfg: { ...cfg, responseCache: { ...cfg.responseCache, enabled: false } },
+      getSharedDeps: () => ({} as any),
+      buildAgent: () => ({ agent: fakeAgent, memory: fakeMemory }),
+    });
+    const app = new Hono();
+    app.post('/chat', handlers.chat(rc));
+    return app;
+  }
+
+  it('streams correlation → token(s) → done as SSE frames', async () => {
+    const res = await chatApp().request('/chat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: 'hi', user_id: 'demo', thread_id: 't1' }),
+    });
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).toContain('event: correlation');
+    expect(text).toContain('event: token\ndata: Hel');
+    expect(text).toContain('event: token\ndata: lo');
+    expect(text).toContain('event: done');
+  });
+});
+
+describe('handlers.health (REQ-E-005)', () => {
+  it('returns 200 { status: ok } with no dependencies', async () => {
+    const app = new Hono();
+    app.get('/health', handlers.health());
+    const res = await app.request('/health');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: 'ok' });
+  });
+});
+
+// The checkout bridge (REQ-E-030..033, INV-002/003). Unit tests stub the
+// OrderRunner; the live workflow run/suspend/resume is covered by
+// tests/integration/order-workflow.integration.test.ts.
+describe('checkout bridge (REQ-E-030 / INV-002 / INV-003)', () => {
+  async function* fakeFullStream() {
+    yield { type: 'text-delta', text: 'Starting checkout' } as any;
+    yield { type: 'finish' } as any;
+  }
+  const fakeMemory = { recall: async () => ({ messages: [] }), saveMessages: async () => {} };
+
+  // A buildAgent seam whose stream flips turn.checkoutRequested, simulating the
+  // agent calling the checkout tool mid-turn.
+  function checkoutAgent() {
+    return (_cfg: Config, turn: any) => ({
+      agent: { stream: async () => { turn.checkoutRequested = true; return { fullStream: fakeFullStream() }; } },
+      memory: fakeMemory,
+    });
+  }
+
+  it('emits a non-terminal interrupt frame FOLLOWED BY done when checkout suspends (REQ-E-030/INV-002)', async () => {
+    const savedCalls: unknown[] = [];
+    const rc = stubRc({
+      cfg: { ...cfg, responseCache: { ...cfg.responseCache, enabled: true } },
+      cache: { lookup: async () => null, save: async (...a: unknown[]) => { savedCalls.push(a); } } as any,
+      getSharedDeps: () => ({} as any),
+      buildAgent: checkoutAgent(),
+      orderRunner: {
+        start: async () => ({ status: 'suspended', suspendPayload: {
+          action: { name: 'place_order', args: { total_usd: 42 }, description: 'Place order' },
+          allowed_decisions: ['approve', 'edit', 'reject'],
+        } }),
+        resume: async () => ({ status: 'placed', message: 'done' }),
+      },
+    });
+    const app = new Hono();
+    app.post('/chat', handlers.chat(rc));
+    const res = await app.request('/chat', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: 'buy my cart', user_id: 'demo', thread_id: 'demo:t1' }),
+    });
+    const text = await res.text();
+    expect(text).toContain('event: interrupt');
+    expect(text).toContain('"name":"place_order"');
+    expect(text).toContain('"allowed_decisions"');
+    // Non-terminal: a done frame follows the interrupt (INV-002).
+    const iIdx = text.indexOf('event: interrupt');
+    const dIdx = text.lastIndexOf('event: done');
+    expect(iIdx).toBeGreaterThan(-1);
+    expect(dIdx).toBeGreaterThan(iIdx);
+    // INV-003: a checkout turn is mutating — never cache-written.
+    expect(savedCalls.length).toBe(0);
+  });
+
+  it('does NOT emit an interrupt (or start the workflow) when the checkout turn errors (INV-002)', async () => {
+    let started = false;
+    async function* erroringStream() {
+      yield { type: 'text-delta', text: 'Starting checkout' } as any;
+      yield { type: 'error', error: 'model blew up' } as any;
+    }
+    const rc = stubRc({
+      getSharedDeps: () => ({} as any),
+      buildAgent: (_cfg: Config, turn: any) => ({
+        agent: { stream: async () => { turn.checkoutRequested = true; return { fullStream: erroringStream() }; } },
+        memory: fakeMemory,
+      }),
+      orderRunner: {
+        start: async () => { started = true; return { status: 'suspended', suspendPayload: { action: { name: 'place_order' }, allowed_decisions: [] } }; },
+        resume: async () => ({ status: 'placed' }),
+      },
+    });
+    const app = new Hono();
+    app.post('/chat', handlers.chat(rc));
+    const res = await app.request('/chat', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: 'buy my cart', user_id: 'demo', thread_id: 'demo:t1' }),
+    });
+    const text = await res.text();
+    expect(text).toContain('event: error');       // the failure is surfaced
+    expect(text).not.toContain('event: interrupt'); // no interrupt after error
+    expect(started).toBe(false);                    // and no workflow started for a failed turn
+  });
+
+  it('resume streams a confirmation token + done on approve (REQ-E-031)', async () => {
+    const rc = stubRc({
+      orderRunner: {
+        start: async () => ({ status: 'suspended' }),
+        resume: async () => ({ status: 'placed', message: 'Order order-1 placed.' }),
+      },
+    });
+    const app = new Hono();
+    app.post('/interrupts/resume', handlers.resume(rc));
+    const res = await app.request('/interrupts/resume', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ thread_id: 'demo:t1', decision: 'approve' }),
+    });
+    const text = await res.text();
+    expect(text).toContain('event: token\ndata: Order order-1 placed.');
+    expect(text).toContain('event: done');
+  });
+
+  it('resume emits an error frame when the runner fails (fail-open)', async () => {
+    const rc = stubRc({
+      orderRunner: {
+        start: async () => ({ status: 'suspended' }),
+        resume: async () => { throw new Error('no suspended run'); },
+      },
+    });
+    const app = new Hono();
+    app.post('/interrupts/resume', handlers.resume(rc));
+    const res = await app.request('/interrupts/resume', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ thread_id: 'demo:t1', decision: 'approve' }),
+    });
+    const text = await res.text();
+    expect(text).toContain('event: error');
+  });
+});

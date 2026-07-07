@@ -1,0 +1,50 @@
+{
+  "name": "mongodb-mastra-ai-qs",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "packageManager": "pnpm@11.9.0",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dev": "tsx src/server/app.ts",
+    "setup": "bash scripts/setup.sh",
+    "build": "mastra build",
+    "start": "node .mastra/output/index.mjs",
+    "seed": "tsx src/ingestion/seed.ts",
+    "embed": "tsx src/ingestion/ingest-multimodal.ts",
+    "provision": "tsx scripts/provision-indexes.ts",
+    "prewarm": "tsx scripts/prewarm-cache.ts",
+    "teardown": "tsx scripts/teardown.ts",
+    "make:catalog": "tsx scripts/make-catalog-pdf.ts",
+    "fetch:catalog-images": "tsx scripts/fetch-catalog-images.ts"
+  },
+  "dependencies": {
+    "@ai-sdk/amazon-bedrock": "latest",
+    "@ai-sdk/anthropic": "latest",
+    "@ai-sdk/openai": "latest",
+    "@hono/node-server": "^2.0.8",
+    "@mastra/core": "latest",
+    "@mastra/memory": "latest",
+    "@mastra/mongodb": "latest",
+    "@mastra/voyageai": "latest",
+    "@napi-rs/canvas": "^1.0.2",
+    "hono": "^4",
+    "mongodb": "^6",
+    "pdfjs-dist": "^6.1.200",
+    "voyageai": "0.3.1",
+    "zod": "^3"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "mastra": "^1.18.0",
+    "pdf-lib": "^1.17.1",
+    "tsx": "^4",
+    "typescript": "^5",
+    "vitest": "^2"
+  }
+}
