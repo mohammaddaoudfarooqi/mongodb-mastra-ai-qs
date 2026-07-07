@@ -106,25 +106,38 @@ export const handlers = {
     return stream(c, async honoStream => {
       c.header('Content-Type', 'text/event-stream');
 
+      // Emit correlation FIRST, before the recall/cache/first-LLM work below. That work
+      // takes several seconds; writing this frame up front gives the client an immediate
+      // ack (spinner/turn id) instead of a dead stream. toCartsmithFrames is told to skip
+      // its own correlation frame so the correlation-first contract still holds exactly once.
+      await honoStream.write(serializeFrame('correlation', correlationId));
+
       // A checkout-intent message must never be served from (or written to) the
       // response cache: a cache hit would `return` before the agent runs, so the
       // checkout tool would never fire and no approval card would appear. Cheap
       // lexical guard — the workflow itself validates the cart, this only routes.
       const looksLikeCheckout = /\b(check\s?out|place (my |an )?order|buy (it|my|now)|purchase)\b/i.test(body.message);
 
-      // Cache read (fresh-conversation only, fail-open).
-      let priorCount = 0;
-      try {
-        const prior = await memory.recall({ threadId, resourceId: userId });
-        priorCount = prior?.messages?.length ?? 0;
-      } catch (err) { logger.warn('memory.recall failed; bypassing cache', { err: String(err), correlationId }); priorCount = 1; }
+      // Cache read (fresh-conversation only, fail-open). We only need to know whether the
+      // thread is empty (isReadEligible === priorCount 0), so a cheap existence check on the
+      // message store beats a full semantic recall() (which runs a vector query — seconds of
+      // pre-turn latency for a boolean). Only computed when the cache is on; a missing/renamed
+      // collection throws → fail-open to priorCount 1 (treat as mid-conversation: skip cache,
+      // never serve a stale opener).
+      let priorCount = 1;
+      if (cfg.responseCache.enabled) {
+        try {
+          priorCount = await rc.db.collection('mastra_messages')
+            .countDocuments({ thread_id: threadId, resourceId: userId }, { limit: 1 });
+        } catch (err) { logger.warn('prior-message count failed; bypassing cache', { err: String(err), correlationId }); priorCount = 1; }
+      }
 
       if (!looksLikeCheckout && cfg.responseCache.enabled && isReadEligible(priorCount)) {
         let hit = null as Awaited<ReturnType<SemanticResponseCache['lookup']>>;
         try { hit = await rc.cache.lookup(body.message, userId, model); }
         catch (err) { logger.warn('cache lookup failed; bypassing', { err: String(err), correlationId }); }
         if (hit) {
-          await honoStream.write(serializeFrame('correlation', correlationId));
+          // correlation already written above.
           await honoStream.write(serializeFrame('token', hit.answer));
           await honoStream.write(serializeFrame('done', ''));
           // Persist the exchange so a follow-up is no longer "fresh" and has history.
@@ -180,7 +193,7 @@ export const handlers = {
           yield serializeFrame('token', `\n\nI couldn't start checkout: ${reason}`);
         }
       }
-      for await (const frame of toCartsmithFrames(parts(), { correlationId, emitPlanFrames: cfg.emitPlanFrames, beforeDone: checkoutTrailer })) {
+      for await (const frame of toCartsmithFrames(parts(), { correlationId, emitPlanFrames: cfg.emitPlanFrames, beforeDone: checkoutTrailer, skipCorrelation: true })) {
         await honoStream.write(frame);
       }
 

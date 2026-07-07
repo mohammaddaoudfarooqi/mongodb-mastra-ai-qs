@@ -40,6 +40,14 @@ Delegate to the "dealsAndCart" specialist for live prices, stock, orders, promot
 anything that reads or changes the shopping cart. When it returns a product or cart summary,
 surface that content in your reply rather than re-deriving it; never claim you could not help
 after the specialist has already returned usable data.
+CHECKOUT — act, don't interrogate: the moment the shopper says anything that means they want to
+buy, purchase, place an order, check out, or approve/confirm a pending order, call the checkout
+tool YOURSELF in the SAME turn. This includes bare replies like "yes", "ok", "approved", or
+"go ahead" when the recent conversation was about buying or checking out. Do NOT delegate this,
+do NOT ask for confirmation first, and NEVER claim the order is placed or completed — the checkout
+tool starts an approval flow that pauses for the shopper's explicit approval. Calling checkout IS
+the correct response to a buy request; describing an approval or a completed order in prose is
+always wrong.
 Never invent product data; look it up. Reply with one concise, grounded answer.
 Remember the shopper's preferences across sessions.
 When the shopper states a durable preference or a stable fact about themselves (for
@@ -49,10 +57,12 @@ consult the remembered shopper profile first.`;
 
 const DEALS_CART_INSTRUCTIONS = `You handle live retail data and the shopping cart.
 Use dataQuery for live prices, stock, orders, and promotions. Never invent product data; look it up.
-To add something to the cart: first find the product with dataQuery to get its _id, name, price_usd,
-and sale_price_usd, then call cartAdd with a line { product_id, name, qty, unit_price_usd, sale_price_usd
-(null when not on sale), applied_coupons: [], line_savings }. The cart belongs to this conversation
-automatically — never pass user or thread IDs to the cart tools.
+To add something to the cart: first find the product with dataQuery to get its _id and name, then call
+cartAdd with a line { product_id (the _id, e.g. "prod_0061"), name, qty }. cartAdd looks up the live
+price and savings itself — do NOT compute unit_price_usd, sale_price_usd, or line_savings, and always
+pass the real _id from dataQuery as product_id (never a name-derived slug). If cartAdd returns
+{ ok: false }, the product was not found — tell the shopper rather than claiming it was added. The cart
+belongs to this conversation automatically — never pass user or thread IDs to the cart tools.
 IMPORTANT — act, don't interrogate: when the shopper asks to add "an" on-sale item or a product by a
 category/attribute without naming a specific one, DO NOT reply with a list of options and DO NOT ask them
 to choose. In the SAME turn, pick the single best in-stock match from your dataQuery results (prefer one
@@ -61,10 +71,8 @@ cartAdd once to add it, then briefly say what you added, the savings, and that t
 another. Add only one line unless the shopper asked for several. Only ask a clarifying question if no
 matching product exists at all.
 Use cartRead to summarize the cart and its total savings.
-CHECKOUT — act, don't interrogate: when the shopper says anything that means they want to buy,
-purchase, place an order, or check out, immediately call the checkout tool in the SAME turn. Do
-NOT ask for confirmation first and do NOT claim the order is placed — the checkout tool starts an
-approval flow that pauses for the shopper. Calling checkout IS the correct response to a buy request.
+You do NOT handle checkout: never claim an order was placed or completed. If the shopper wants to
+buy or check out, the concierge owns that flow — just summarize the cart if asked.
 Be concise.`;
 
 /** Shared connection-holding deps created once per app (or once per test for buildConcierge's legacy path). */
@@ -128,20 +136,24 @@ export function buildConcierge(cfg: Config, turn: TurnContext, deps?: ConciergeD
   });
   const checkout = buildCheckoutTool({ onCheckout: () => { turn.checkoutRequested = true; } });
 
-  // The router owns knowledgeSearch DIRECTLY (not via a knowledge sub-agent). A sub-agent
+  // The router owns knowledgeSearch AND checkout DIRECTLY (not via a sub-agent). A sub-agent
   // that calls a tool and returns empty text leaves the supervisor with nothing to ground
   // on (Mastra returns only the sub-agent's *text* to the supervisor), which produced a
   // flaky "having trouble retrieving" hedge on the fast router model even though retrieval
-  // succeeded. Reading the hits in the same LLM that answers removes that boundary. Live
-  // retail data and the cart stay behind the dealsAndCart specialist (they carry the MQL
-  // safety guard, cart identity, and checkout workflow trigger).
+  // succeeded. The same boundary broke checkout: when the specialist owned the checkout
+  // trigger, a bare "yes"/"approved" confirmation carried no delegation keyword, so the
+  // router answered conversationally and fabricated a completed order — the checkout tool
+  // (and its `checkoutRequested` signal) never fired, so no approval card, no workflow, no
+  // order, cart never cleared. checkout is a pure signal (no MQL guard, no cart identity),
+  // so the router that converses with the shopper must own it. Live retail data and the
+  // cart stay behind the dealsAndCart specialist (MQL safety guard + cart identity).
   const dealsAndCart = new Agent({
     id: 'dealsAndCart',
     name: 'dealsAndCart',
     description: 'Handles live prices, stock, promotions, and the shopping cart.',
     instructions: DEALS_CART_INSTRUCTIONS,
     model: getLLM(cfg, turn.modelOverride),
-    tools: { dataQuery, ...cart, checkout },
+    tools: { dataQuery, ...cart },
   });
 
   const agent = new Agent({
@@ -149,7 +161,7 @@ export function buildConcierge(cfg: Config, turn: TurnContext, deps?: ConciergeD
     name: 'concierge',
     instructions: ROUTER_INSTRUCTIONS,
     model: getLLM(cfg, turn.modelOverride),
-    tools: { knowledgeSearch },
+    tools: { knowledgeSearch, checkout },
     agents: { dealsAndCart },
     memory,
   });

@@ -43,6 +43,17 @@ describe('toCartsmithFrames', () => {
     expect(frames.at(-1)).toBe('event: done\ndata: \n\n');
   });
 
+  it('omits the correlation frame when skipCorrelation is set (caller wrote it early)', async () => {
+    const parts: StreamPart[] = [
+      { type: 'text-delta', text: 'Hi' },
+      { type: 'finish' },
+    ];
+    const frames = await collect(toCartsmithFrames(mockStream(parts), { correlationId: 'run-1', skipCorrelation: true }));
+    expect(frames.some(f => f.startsWith('event: correlation'))).toBe(false);
+    expect(frames[0]).toBe('event: token\ndata: Hi\n\n');
+    expect(frames.at(-1)).toBe('event: done\ndata: \n\n');
+  });
+
   it('maps tool-call / tool-result to status frames', async () => {
     const parts: StreamPart[] = [
       { type: 'tool-call', toolName: 'knowledgeSearch' },

@@ -150,6 +150,9 @@ describe('checkout bridge (REQ-E-030 / INV-002 / INV-003)', () => {
     const savedCalls: unknown[] = [];
     const rc = stubRc({
       cfg: { ...cfg, responseCache: { ...cfg.responseCache, enabled: true } },
+      // With the cache on, the chat handler counts prior messages via
+      // db.collection('mastra_messages').countDocuments to test opener-eligibility.
+      db: { collection: () => ({ countDocuments: async () => 0 }) } as unknown as Db,
       cache: { lookup: async () => null, save: async (...a: unknown[]) => { savedCalls.push(a); } } as any,
       getSharedDeps: () => ({} as any),
       buildAgent: checkoutAgent(),

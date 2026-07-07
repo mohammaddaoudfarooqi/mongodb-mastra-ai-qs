@@ -25,6 +25,11 @@ describe('buildConcierge', () => {
     expect(Object.keys(subs)).toEqual(['dealsAndCart']);
     const tools = await (agent as any).listTools();
     expect(Object.keys(tools)).toContain('knowledgeSearch');
+    // checkout is a direct router tool too: it is a pure signal (no MQL guard, no cart
+    // identity), and the router is the agent that converses with the shopper, so a bare
+    // "yes"/"approved" confirmation reaches the tool instead of being narrated as a fake
+    // completed order by a router that lacked the tool (the checkout-not-triggered bug).
+    expect(Object.keys(tools)).toContain('checkout');
   });
 
   it('threads the turn signal bag rather than defaulting it away', async () => {
@@ -34,12 +39,16 @@ describe('buildConcierge', () => {
     expect(t.signals.knowledgeSearchRan).toBe(false);
   });
 
-  it('gives the dealsAndCart specialist a checkout tool to trigger the order workflow', async () => {
+  it('gives the dealsAndCart specialist data + cart tools but NOT checkout', async () => {
     const { buildConcierge } = await import('./agent');
     const { agent } = buildConcierge(cfg, turn());
     const subs = (agent as any).__getStaticAgents();
     const tools = await (subs.dealsAndCart as any).listTools();
-    expect(Object.keys(tools)).toContain('checkout');
+    expect(Object.keys(tools)).toEqual(expect.arrayContaining(['dataQuery', 'cartAdd', 'cartRead', 'cartRemove']));
+    // checkout moved to the router (see the topology test above); the specialist must not
+    // own it, or a delegated turn could start the order flow without the router's approval
+    // framing — and a bare confirmation would again miss the tool.
+    expect(Object.keys(tools)).not.toContain('checkout');
   });
 
   it('configures resource-scoped recall and working memory on the router memory', async () => {

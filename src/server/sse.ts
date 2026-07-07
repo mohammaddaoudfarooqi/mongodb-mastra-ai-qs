@@ -45,9 +45,16 @@ export async function* toCartsmithFrames(
      * string-sniffing this function's output to reorder frames.
      */
     beforeDone?: () => AsyncIterable<string>;
+    /**
+     * When the caller has ALREADY written the correlation frame (to give the client
+     * instant feedback before the slow recall/cache/first-LLM work), set this so the
+     * frame is not emitted twice. The correlation-first contract still holds — it is
+     * just satisfied by the caller instead of here.
+     */
+    skipCorrelation?: boolean;
   },
 ): AsyncGenerator<string> {
-  yield serializeFrame('correlation', opts.correlationId);
+  if (!opts.skipCorrelation) yield serializeFrame('correlation', opts.correlationId);
   const plan: PlanState = { todos: [] };
   let terminated = false;
   try {
