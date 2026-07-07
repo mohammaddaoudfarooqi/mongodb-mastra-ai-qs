@@ -66,7 +66,7 @@ export function buildOrderRunner(cfg: Config, rc: RouteContext): OrderRunner {
       });
       return { status: result.status, suspendPayload: unwrapSuspendPayload(result as any) };
     },
-    resume: async (threadId, decision, editedAction) => {
+    resume: async (threadId, decision, editedAction, cartVersion) => {
       const wf = getWorkflow();
       // Recompute the same deterministic runId — recovers the suspended run from the
       // durable snapshot with no in-process state (works across restarts/replicas).
@@ -74,7 +74,11 @@ export function buildOrderRunner(cfg: Config, rc: RouteContext): OrderRunner {
       // the caller surfaces as a clean error frame (no second order).
       const run = await (wf as any).createRun({ runId: runIdFor(threadId) });
       const result = await run.resume({
-        resumeData: { decision, ...(editedAction ? { edited_action: editedAction } : {}) },
+        resumeData: {
+          decision,
+          ...(editedAction ? { edited_action: editedAction } : {}),
+          ...(cartVersion ? { cart_version: cartVersion } : {}),
+        },
       });
       const out = (result as any).result ?? result;
       return { status: out?.status ?? result.status, message: out?.message };

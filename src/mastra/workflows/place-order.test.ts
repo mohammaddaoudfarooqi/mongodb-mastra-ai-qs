@@ -66,7 +66,9 @@ const LINE = (over: Partial<Doc> = {}): Doc => ({
 
 const INIT = { userId: 'u1', threadId: 'u1:t1', now: '2026-07-07T00:00:00.000Z', orderId: 'order-fixed-1' };
 
-const QUOTE = { lines: [LINE()], subtotal: 16, total_savings: 4, total_usd: 16 };
+// cart_version is the fingerprint of [LINE()] (product_id:qty) — must match what
+// cartFingerprint produces for the seeded cart, or the drift guard fires.
+const QUOTE = { lines: [LINE()], subtotal: 16, total_savings: 4, total_usd: 16, cart_version: 'p1:2' };
 
 describe('place-order workflow steps', () => {
   it('exposes a committed workflow and the three steps bound to a db', () => {
@@ -97,6 +99,9 @@ describe('place-order workflow steps', () => {
     expect(q.total_savings).toBe(4);
     expect(q.total_usd).toBe(21);
     expect(q.lines).toHaveLength(2);
+    // Quote carries a cart fingerprint (order-independent product_id:qty) so placeOrder
+    // can detect drift after approval (reviewer finding #3).
+    expect(q.cart_version).toBe('p1:2|p2:1');
   });
 
   // REQ-E-034: insufficient stock fails BEFORE any suspend/write.
@@ -211,5 +216,60 @@ describe('place-order workflow steps', () => {
     } as any)).rejects.toThrow(/insufficient stock/i);
     expect(store.orders).toHaveLength(0);   // no order written
     expect(store.products[0].stock).toBe(1); // stock untouched (never negative)
+  });
+
+  // Reviewer finding #3: approving a stale quote must NOT place the order or wipe the
+  // cart the shopper changed after the approval card. The in-transaction fingerprint
+  // re-check aborts when the live cart differs from the approved quote.
+  it('placeOrder aborts (no write, cart intact) when the cart changed after approval', async () => {
+    const { db, store } = fakeDb({
+      // Live cart now has an EXTRA line the quote never saw (qty/line drift).
+      carts: [{ userId: 'u1', threadId: 'u1:t1', lines: [LINE(), LINE({ product_id: 'p2', qty: 1 })] }],
+      products: [{ _id: 'p1', stock: 50 }, { _id: 'p2', stock: 50 }],
+    });
+    await expect(buildOrderSteps(db).placeOrder.execute({
+      inputData: { decision: 'approve', quote: QUOTE }, // quote.cart_version = 'p1:2'
+      getInitData: () => INIT,
+    } as any)).rejects.toThrow(/cart changed/i);
+    expect(store.orders).toHaveLength(0);          // no order placed
+    expect(store.carts[0].lines).toHaveLength(2);  // the changed cart is NOT wiped
+  });
+
+  it('placeOrder commits when the live cart still matches the approved quote', async () => {
+    const { db, store } = fakeDb({
+      carts: [{ userId: 'u1', threadId: 'u1:t1', lines: [LINE()] }], // fingerprint 'p1:2'
+      products: [{ _id: 'p1', stock: 50 }],
+    });
+    const out = await buildOrderSteps(db).placeOrder.execute({
+      inputData: { decision: 'approve', quote: QUOTE },
+      getInitData: () => INIT,
+    } as any) as any;
+    expect(out.status).toBe('placed');
+    expect(store.orders).toHaveLength(1);
+    expect(store.carts).toHaveLength(0); // matching cart is cleared as normal
+  });
+
+  // The earlier (cheaper) binding: approveOrder downgrades an approve to a cancel when the
+  // resume echoes a cart_version that no longer matches the server quote.
+  it('approveOrder downgrades approve→reject when resume cart_version mismatches the quote', async () => {
+    const { db } = fakeDb({});
+    const out = await buildOrderSteps(db).approveOrder.execute({
+      inputData: QUOTE, // cart_version 'p1:2'
+      resumeData: { decision: 'approve', cart_version: 'p1:2|p9:9' }, // stale card
+      suspend: async () => ({}),
+    } as any) as any;
+    expect(out.decision).toBe('reject');
+  });
+
+  it('approveOrder keeps approve when resume cart_version matches (or is absent)', async () => {
+    const { db } = fakeDb({});
+    const match = await buildOrderSteps(db).approveOrder.execute({
+      inputData: QUOTE, resumeData: { decision: 'approve', cart_version: 'p1:2' }, suspend: async () => ({}),
+    } as any) as any;
+    expect(match.decision).toBe('approve');
+    const absent = await buildOrderSteps(db).approveOrder.execute({
+      inputData: QUOTE, resumeData: { decision: 'approve' }, suspend: async () => ({}),
+    } as any) as any;
+    expect(absent.decision).toBe('approve'); // backward-compatible when client omits it
   });
 });

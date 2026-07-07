@@ -595,12 +595,16 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       const assistantId = genId();
       dispatch({ type: 'START_ASSISTANT', id: assistantId });
 
+      // Echo the cart_version the card was built from (if the interrupt carried one) so the
+      // server can reject this approval if the cart changed since the card appeared.
+      const cartVersion = interrupt.action?.args?.cart_version;
       streamResumeInterrupt(
         {
           thread_id: interrupt.thread_id,
           decision,
           ...(extra?.edited_action ? { edited_action: extra.edited_action } : {}),
           ...(extra?.message ? { message: extra.message } : {}),
+          ...(typeof cartVersion === 'string' ? { cart_version: cartVersion } : {}),
         },
         buildStreamHandlers({ assistantId, ctrl, userId: state.userId, sub }),
         ctrl.signal,

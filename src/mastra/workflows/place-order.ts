@@ -1,7 +1,7 @@
 import { createWorkflow, createStep } from '@mastra/core/workflows';
 import { z } from 'zod';
 import type { Db } from 'mongodb';
-import { computeCartTotals, type CartLine } from '../tools/cart';
+import { computeCartTotals, cartFingerprint, type CartLine } from '../tools/cart';
 
 /**
  * Human-in-the-loop order workflow (revives the parked "Spec 530" checkout).
@@ -31,6 +31,9 @@ const QuoteSchema = z.object({
   subtotal: z.number(),
   total_savings: z.number(),
   total_usd: z.number(),
+  // Fingerprint of the cart this quote was built from. Carried through suspend→resume so
+  // placeOrder can detect (inside the transaction) whether the cart changed after approval.
+  cart_version: z.string(),
 });
 
 const ResultSchema = z.object({
@@ -43,6 +46,10 @@ const ResultSchema = z.object({
 const ResumeSchema = z.object({
   decision: z.enum(['approve', 'edit', 'reject']),
   edited_action: z.object({ name: z.string(), args: z.record(z.any()) }).optional(),
+  // The cart_version the shopper saw on the approval card, echoed back from the interrupt.
+  // When present on an approve, it must match the server quote's version or the approve is
+  // downgraded to a safe cancel — binds the approval to the exact quote that was shown.
+  cart_version: z.string().optional(),
 });
 
 const SuspendSchema = z.object({
@@ -78,7 +85,7 @@ export function buildOrderSteps(db: Db) {
       if (insufficient.length) throw new Error(`Insufficient stock for: ${insufficient.join(', ')}`);
 
       const { subtotal, total_savings } = computeCartTotals(lines);
-      return { lines, subtotal, total_savings, total_usd: subtotal };
+      return { lines, subtotal, total_savings, total_usd: subtotal, cart_version: cartFingerprint(lines) };
     },
   });
 
@@ -102,6 +109,15 @@ export function buildOrderSteps(db: Db) {
       // trusting it would let a resume set an arbitrary total or drive stock negative.
       // `edit` is handled downstream as a safe cancel (adjust cart + re-checkout);
       // only `approve` commits, against the quote this server built and validated.
+      //
+      // Binding (reviewer finding #3): if the resume echoes a cart_version, it must match
+      // the quote the server is about to place. A mismatch means the shopper approved a card
+      // built from a different cart state — downgrade to a safe cancel rather than place it.
+      // (The transaction re-checks the LIVE cart too; this is the earlier, cheaper guard.)
+      if (resumeData.decision === 'approve' && typeof resumeData.cart_version === 'string'
+          && resumeData.cart_version !== inputData.cart_version) {
+        return { decision: 'reject', quote: inputData };
+      }
       return { decision: resumeData.decision, quote: inputData };
     },
   });
@@ -129,6 +145,18 @@ export function buildOrderSteps(db: Db) {
 
       await client.withSession(async (session: any) => {
         await session.withTransaction(async () => {
+          // Cart-drift guard (reviewer finding #3): re-read the cart INSIDE the transaction
+          // and abort if it no longer matches the approved quote. Without this, approving an
+          // old interrupt card would place the stale quote AND delete whatever is in the cart
+          // now — silently wiping items the shopper added after the card appeared. Keyed on
+          // the deterministic cart fingerprint, so it holds across the suspend→resume boundary
+          // and across processes/replicas. This is the authoritative check: it cannot be
+          // bypassed by a client, unlike a token echoed through the resume request.
+          const current = await db.collection('carts').findOne({ userId: init.userId, threadId: init.threadId }, { session });
+          const currentVersion = cartFingerprint((current?.lines ?? []) as CartLine[]);
+          if (currentVersion !== quote.cart_version) {
+            throw new Error('Your cart changed after this order was prepared — review your cart and check out again.');
+          }
           await db.collection('orders').insertOne({
             _id: init.orderId as any,
             userId: init.userId,

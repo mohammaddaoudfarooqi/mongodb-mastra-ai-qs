@@ -274,6 +274,40 @@ export interface InterruptEvent {
   allowed_decisions: string[];
 }
 
+/* ── SSE frame validators ──────────────────────────────────────────────────
+ * The server frames are trusted, but a payload can be valid JSON yet the wrong
+ * SHAPE (e.g. a model-influenced tool result). Validate before handing frames to
+ * render code (reviewer finding #8), so a malformed-but-valid-JSON frame is dropped
+ * instead of reaching PlanSection/StatusChip/ApprovalCard with missing fields. */
+const isObj = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v);
+
+function asPlanSnapshot(v: unknown): PlanSnapshot | null {
+  if (!isObj(v) || !Array.isArray(v.todos)) return null;
+  const todos = v.todos.filter(
+    (t): t is Todo =>
+      isObj(t) && typeof t.id === 'string' && typeof t.text === 'string' &&
+      (t.status === 'pending' || t.status === 'in_progress' || t.status === 'completed'),
+  );
+  return { todos, updated_at: typeof v.updated_at === 'string' ? v.updated_at : null };
+}
+
+function asStatusEvent(v: unknown): StatusEvent | null {
+  if (!isObj(v) || typeof v.name !== 'string') return null;
+  if (v.phase !== 'tool_start' && v.phase !== 'tool_end') return null;
+  return { phase: v.phase, name: v.name };
+}
+
+function asInterruptEvent(v: unknown): InterruptEvent | null {
+  if (!isObj(v) || typeof v.thread_id !== 'string' || !isObj(v.action)) return null;
+  const a = v.action;
+  if (typeof a.name !== 'string' || typeof a.description !== 'string' || !isObj(a.args)) return null;
+  const decisions = Array.isArray(v.allowed_decisions)
+    ? v.allowed_decisions.filter((d): d is string => typeof d === 'string')
+    : [];
+  return { thread_id: v.thread_id, action: { name: a.name, args: a.args, description: a.description }, allowed_decisions: decisions };
+}
+
 export interface StreamHandlers {
   onToken: (token: string) => void;
   // First frame of every /chat stream: the per-turn correlation id. Used as
@@ -403,8 +437,8 @@ async function consumeSSEStream(
       else if (eventName === 'plan') {
         if (handlers.onPlan) {
           try {
-            const parsed = JSON.parse(data) as PlanSnapshot;
-            handlers.onPlan(parsed);
+            const parsed = asPlanSnapshot(JSON.parse(data));
+            if (parsed) handlers.onPlan(parsed);
           } catch {
             /* malformed frame; ignore */
           }
@@ -412,8 +446,8 @@ async function consumeSSEStream(
       } else if (eventName === 'status') {
         if (handlers.onStatus) {
           try {
-            const parsed = JSON.parse(data) as StatusEvent;
-            handlers.onStatus(parsed);
+            const parsed = asStatusEvent(JSON.parse(data));
+            if (parsed) handlers.onStatus(parsed);
           } catch {
             /* malformed frame; ignore */
           }
@@ -423,8 +457,8 @@ async function consumeSSEStream(
         // still follows, so do NOT set sawTerminal here.
         if (handlers.onInterrupt) {
           try {
-            const parsed = JSON.parse(data) as InterruptEvent;
-            handlers.onInterrupt(parsed);
+            const parsed = asInterruptEvent(JSON.parse(data));
+            if (parsed) handlers.onInterrupt(parsed);
           } catch {
             /* malformed frame; ignore */
           }
@@ -454,6 +488,10 @@ export interface ResumeInterruptRequest {
   decision: 'approve' | 'edit' | 'reject';
   edited_action?: { name: string; args: Record<string, unknown> };
   message?: string;
+  // The cart fingerprint the shopper saw on the approval card (from the interrupt's
+  // action.args.cart_version). Echoed back so the server can reject an approval whose
+  // cart changed since the card was shown (binds the approval to that exact quote).
+  cart_version?: string;
 }
 
 /**
