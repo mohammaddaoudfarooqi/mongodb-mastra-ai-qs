@@ -441,8 +441,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       userId: string;
       sub: string;
       onDoneExtra?: () => void;
+      onErrorExtra?: () => void;
     }) => {
-      const { assistantId, ctrl, userId, sub, onDoneExtra } = opts;
+      const { assistantId, ctrl, userId, sub, onDoneExtra, onErrorExtra } = opts;
       return {
         onToken: (tok: string) => {
           if (ctrl.signal.aborted) return;
@@ -494,6 +495,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           if (ctrl.signal.aborted) return;
           dispatch({ type: 'REPLACE_WITH_ERROR', id: assistantId, detail });
           loadingRef.current = false;
+          // e.g. a failed checkout resume re-arms the approval card so the user can retry.
+          onErrorExtra?.();
         },
       };
     },
@@ -590,6 +593,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
       // Clear the card immediately so the buttons can't be double-fired; the
       // FINALIZE/SET_INTERRUPT below will re-arm it if the agent pauses again.
+      // Keep the interrupt so we can RESTORE the card if the resume fails (R2 #4) —
+      // a transient network/server error must not strand the user unable to retry.
+      const pending = interrupt;
       dispatch({ type: 'CLEAR_INTERRUPT' });
 
       const assistantId = genId();
@@ -606,7 +612,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           ...(extra?.message ? { message: extra.message } : {}),
           ...(typeof cartVersion === 'string' ? { cart_version: cartVersion } : {}),
         },
-        buildStreamHandlers({ assistantId, ctrl, userId: state.userId, sub }),
+        buildStreamHandlers({
+          assistantId, ctrl, userId: state.userId, sub,
+          // Restore the approval card if the resume errored, so the user can retry.
+          onErrorExtra: () => dispatch({ type: 'SET_INTERRUPT', interrupt: pending }),
+        }),
         ctrl.signal,
       );
     },

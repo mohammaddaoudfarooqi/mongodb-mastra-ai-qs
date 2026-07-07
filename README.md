@@ -126,9 +126,17 @@ Rate any reply with the thumbs buttons; ratings persist to the `feedback` collec
 
 ## Ports and proxy
 
-The frontend calls `/api/*`; its Vite dev proxy (and the prod nginx config) rewrite `/api/*` to
-`/*` and forward to the backend on port 8000. If you change the backend port, update the proxy
-target in `frontend/vite.config.ts`.
+The frontend always calls `/api/*`. The two backends differ in how they expose those routes:
+
+- **Dev** (`pnpm dev` → the standalone Hono app in `src/server/app.ts`) serves them at bare
+  paths (`/chat`, `/cart`, …), so the Vite dev proxy rewrites `/api/*` → `/*` and forwards to
+  port 8000 (`frontend/vite.config.ts`).
+- **Prod / container** runs the `mastra build` artifact (`node .mastra/output/index.mjs`), which
+  serves the same routes UNDER `/api/*`. So the prod nginx configs (`frontend/nginx.conf`,
+  `frontend/nginx.k8s.conf`) **preserve** the `/api` prefix — they do not strip it. Stripping it
+  against the deployed artifact would 404 every call.
+
+If you change the backend port, update the dev proxy target in `frontend/vite.config.ts`.
 
 ## Tests
 
@@ -148,9 +156,14 @@ target in `frontend/vite.config.ts`.
 To wipe the app-owned collections (leaves Mastra-managed `mastra_*` tables intact), then rebuild:
 
 ```bash
-pnpm teardown
+CONFIRM_DESTRUCTIVE=1 pnpm teardown
 pnpm provision && pnpm seed && pnpm embed
 ```
+
+`teardown` drops app-owned collections, so it requires `CONFIRM_DESTRUCTIVE=1` to run. Both
+`teardown` and `seed` also refuse to run against a database whose name looks like production
+(matches `prod`/`production`/`live`) unless `FORCE_DESTRUCTIVE=1` is set — a guard against a
+mis-pointed `.env` wiping the wrong database.
 
 ## Notes
 
