@@ -20,6 +20,10 @@ export interface Config {
   dataAgentAllowList: string[]; dataAgentLimit: number;
   emitPlanFrames: boolean; ingestDescribe: boolean; ingestAssetsDir?: string; ingestPdfScale: number;
   port: number; defaultUserId: string;
+  // Persist app logs to a MongoDB collection (in addition to stdout/stderr). `enabled`
+  // defaults on; `collection` is the target name; `retentionDays` drives a TTL index so
+  // the log collection self-prunes. Writes are buffered + fail-open (never block a request).
+  appLog: { enabled: boolean; collection: string; retentionDays: number };
   mongoPool: { maxPoolSize: number; minPoolSize: number };
   prewarmQueries?: string[];
   // Auth mode: 'local' (default) trusts the client-supplied user_id — demo only, not secure.
@@ -87,6 +91,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ingestPdfScale: num(env.INGEST_PDF_SCALE, 2.0),
     port: num(env.PORT, 8000),
     defaultUserId: env.DEFAULT_USER_ID ?? 'demo',
+    appLog: {
+      enabled: bool(env.APP_LOG_MONGO_ENABLED, true),
+      collection: env.APP_LOG_COLLECTION ?? 'app_logs',
+      retentionDays: num(env.APP_LOG_RETENTION_DAYS, 30),
+    },
     authMode,
     authRequired: authMode === 'sso',
     mongoPool: {
