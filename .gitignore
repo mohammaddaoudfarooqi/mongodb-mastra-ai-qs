@@ -237,7 +237,7 @@ frontend/dist
 # Local-only archive of specs, plans, and scratch docs (kept for reference,
 # never tracked or pushed to the shared remote)
 archive/
-
+specs/
 # Deployment-only auth adapter (the hosting platform's SSO integration). Provided at
 # deploy time, never committed to the public repo. See src/server/auth.ts (AUTH_ADAPTER_MODULE).
 src/server/auth-adapter.ts
