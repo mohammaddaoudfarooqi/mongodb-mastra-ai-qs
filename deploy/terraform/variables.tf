@@ -121,7 +121,7 @@ variable "atlas_cluster_name" {
 variable "atlas_db_username" {
   description = "Atlas database user for the app."
   type        = string
-  default     = "mastra_app"
+  default     = "mastra_concierge"
 }
 
 variable "atlas_db_password" {

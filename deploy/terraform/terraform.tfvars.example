@@ -32,8 +32,10 @@ atlas_cidr  = "192.168.248.0/21"       # Atlas AWS containers require a /21
 # Leave it unset AND pass TF_VAR_atlas_org_id to create a new project instead.
 atlas_project_name = "mastra-ai4"      # only used when creating a new project
 atlas_cluster_name = "mastra-ai4-cluster"
-atlas_db_username  = "mastra_app"
-# atlas_db_password comes from TF_VAR_atlas_db_password, or deploy.sh generates one.
+atlas_db_username  = "mastra_concierge"
+# atlas_db_password: leave unset. deploy.sh generates a 28-char alphanumeric password on the
+# first run and persists it to deploy/.deploy-secrets.env (gitignored), then reuses it on every
+# later run and terraform apply. Set TF_VAR_atlas_db_password only to pin your own.
 
 # ── App config ──────────────────────────────────────────────────────────────────
 mongodb_database   = "mongodb_mastra_qs"

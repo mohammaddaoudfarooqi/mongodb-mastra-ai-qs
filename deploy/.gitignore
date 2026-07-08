@@ -10,3 +10,5 @@ tfplan
 # SSH keys, deploy logs.
 *.pem
 deploy.log
+# Generated secrets persisted by deploy.sh (Atlas DB password) — never commit.
+.deploy-secrets.env

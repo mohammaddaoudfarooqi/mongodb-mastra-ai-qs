@@ -10,8 +10,17 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-TF_DIR=$(cd "$SCRIPT_DIR/../terraform" && pwd)
+DEPLOY_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
+TF_DIR="$DEPLOY_DIR/terraform"
 tf() { terraform -chdir="$TF_DIR" "$@"; }
+
+# Reuse the generated Atlas DB password persisted by deploy.sh so the mongodbatlas provider
+# can delete the DB user without seeing a spurious password diff mid-destroy.
+SECRETS_FILE="$DEPLOY_DIR/.deploy-secrets.env"
+if [[ -f "$SECRETS_FILE" ]]; then
+  set -a; # shellcheck disable=SC1090
+  . "$SECRETS_FILE"; set +a
+fi
 
 if [[ -t 1 ]]; then C_R=$'\033[31m'; C_Y=$'\033[33m'; C_0=$'\033[0m'; else C_R=; C_Y=; C_0=; fi
 AUTO_YES=false; [[ "${1:-}" == "--yes" || "${1:-}" == "-y" ]] && AUTO_YES=true
