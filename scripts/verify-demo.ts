@@ -94,6 +94,26 @@ async function main() {
     record(b.name, !bad, bad);
   }
 
+  // Model-coverage beat: the UI picker offers several models; send a trivial message to EACH
+  // and require a non-error, non-empty reply. This catches per-model failures the single-model
+  // beats above miss — e.g. a Bedrock inference profile the instance-role policy doesn't
+  // authorize (a 403 surfaced as AI_APICallError: Forbidden) that only fires when a shopper
+  // switches the picker to that model. Regression guard for the Haiku-403 IAM scope bug.
+  {
+    let models: { id: string; label: string }[] = [];
+    try {
+      const mr = await fetch(`${API}/models`);
+      const body = await mr.json() as { models?: { id: string; label: string }[] };
+      models = body.models ?? [];
+    } catch (err) { record('model-coverage', false, `could not fetch /models: ${String(err)}`); }
+    for (const m of models) {
+      const r = await chat({ user_id: uid, thread_id: `${uid}:model:${m.id}:${Date.now()}`, message: 'hi', model: m.id });
+      const httpErr = [...r.events].find(e => e.startsWith('http_'));
+      const bad = httpErr ? httpErr : r.events.has('error') ? 'error frame (model not invocable — check Bedrock access + IAM)' : !r.tokens.trim() ? 'empty answer' : '';
+      record(`model: ${m.id}`, !bad, bad);
+    }
+  }
+
   // Memory beat: store a preference, then confirm recall references it (same thread).
   {
     const tid = `${uid}:mem:${Date.now()}`;
