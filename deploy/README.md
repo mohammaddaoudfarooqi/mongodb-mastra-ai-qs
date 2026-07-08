@@ -19,8 +19,9 @@ for the live demo.
 
 - `terraform` ≥ 1.13, `aws` CLI (configured: `aws sts get-caller-identity` works), `jq`, `ssh`,
   `curl`, and `pnpm` (for the data-seed step) on the deploy machine.
-- A MongoDB Atlas **Programmatic API Key** (public + private) and either an org id (to create a
-  project) or an existing project id.
+- A MongoDB Atlas **Programmatic API Key** (public + private) and an existing **project id**
+  (recommended — `TF_VAR_atlas_project_id`). To create a new project instead, supply an org id
+  (`TF_VAR_atlas_org_id`); that path needs the Project-Creator role in the org.
 - A Voyage API key.
 - **Bedrock model access enabled** for Claude in your target region — this can take hours to
   approve, so do it first: <https://console.aws.amazon.com/bedrock/home?region=us-west-2#/modelaccess>
@@ -33,7 +34,9 @@ cp deploy/terraform/terraform.tfvars.example deploy/terraform/terraform.tfvars
 
 export TF_VAR_atlas_public_key=...      # secrets via env, never in the file
 export TF_VAR_atlas_private_key=...
-export TF_VAR_atlas_org_id=...          # or set atlas_project_id in tfvars
+export TF_VAR_atlas_project_id=...      # deploy into an existing project (recommended)
+                                        #   — or TF_VAR_atlas_org_id to create a new one
+                                        #     (needs the Project-Creator org role)
 export TF_VAR_voyage_api_key=...
 
 deploy/scripts/deploy.sh                # add --yes to skip the apply confirmation

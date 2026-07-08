@@ -9,18 +9,18 @@ output "public_dns" {
 }
 
 output "app_url" {
-  description = "Storefront URL (nginx on :80 → app:8000)."
-  value       = "http://${aws_instance.app.public_ip}/"
+  description = "Storefront URL (nginx on :80 → app:8000), addressed by the EC2 public DNS."
+  value       = "http://${aws_instance.app.public_dns}/"
 }
 
 output "studio_url" {
-  description = "Mastra Studio (dev/observability UI) on :4111."
-  value       = "http://${aws_instance.app.public_ip}:4111/"
+  description = "Mastra Studio (dev/observability UI) on :4111, addressed by the EC2 public DNS."
+  value       = "http://${aws_instance.app.public_dns}:4111/"
 }
 
 output "ssh_command" {
   description = "SSH to the box."
-  value       = "ssh ec2-user@${aws_instance.app.public_ip}"
+  value       = "ssh ec2-user@${aws_instance.app.public_dns}"
 }
 
 output "ssm_prefix" {

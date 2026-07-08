@@ -5,7 +5,7 @@
 #
 # Example run:
 #   export TF_VAR_atlas_public_key=...   TF_VAR_atlas_private_key=...
-#   export TF_VAR_atlas_org_id=...       TF_VAR_voyage_api_key=...
+#   export TF_VAR_atlas_project_id=...   TF_VAR_voyage_api_key=...   # or TF_VAR_atlas_org_id to create a project
 #   deploy/scripts/deploy.sh
 
 # ── Mode / region ──────────────────────────────────────────────────────────────
@@ -28,8 +28,9 @@ subnet_cidr = "10.0.1.0/24"
 atlas_cidr  = "192.168.248.0/21"       # Atlas AWS containers require a /21
 
 # ── Atlas (non-secret bits) ────────────────────────────────────────────────────
-# atlas_project_id  = ""               # empty ⇒ create a project (needs TF_VAR_atlas_org_id)
-atlas_project_name = "mastra-ai4"
+# atlas_project_id comes from TF_VAR_atlas_project_id (deploy into an existing project).
+# Leave it unset AND pass TF_VAR_atlas_org_id to create a new project instead.
+atlas_project_name = "mastra-ai4"      # only used when creating a new project
 atlas_cluster_name = "mastra-ai4-cluster"
 atlas_db_username  = "mastra_app"
 # atlas_db_password comes from TF_VAR_atlas_db_password, or deploy.sh generates one.

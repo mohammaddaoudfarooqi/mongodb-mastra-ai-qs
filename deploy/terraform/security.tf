@@ -1,48 +1,27 @@
 resource "aws_security_group" "app" {
   name        = "${var.name_prefix}-app-sg"
-  description = "Mastra concierge app: all ingress from the office/VPN ranges + admin SSH, egress all."
+  description = "Mastra concierge app: all traffic from the office/VPN ranges + admin SSH, egress all."
   vpc_id      = aws_vpc.main.id
   tags        = { Name = "${var.name_prefix}-app-sg" }
 
-  # SSH: the deploy machine (admin_cidr) plus the office/VPN ranges.
+  # Office/VPN ranges get all traffic (matches the maap-temporal reference posture).
+  # Per-port rules × 31 CIDRs would blow past AWS's 60-rule/SG limit, so use one
+  # all-protocol rule per CIDR (~31 rules). These are trusted corporate ranges.
   ingress {
-    description = "SSH (admin + office/VPN)"
+    description = "All traffic from office/VPN ranges"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = var.office_cidrs
+  }
+
+  # The deploy machine keeps SSH regardless of the office list.
+  ingress {
+    description = "SSH (deploy machine)"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = concat([var.admin_cidr], var.office_cidrs)
-  }
-
-  ingress {
-    description = "HTTP (nginx to app)"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = var.office_cidrs
-  }
-
-  ingress {
-    description = "HTTPS (reserved for optional TLS)"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = var.office_cidrs
-  }
-
-  ingress {
-    description = "App port (direct, admin-only debugging)"
-    from_port   = 8000
-    to_port     = 8000
-    protocol    = "tcp"
-    cidr_blocks = var.office_cidrs
-  }
-
-  ingress {
-    description = "Mastra Studio (dev/observability UI)"
-    from_port   = 4111
-    to_port     = 4111
-    protocol    = "tcp"
-    cidr_blocks = var.office_cidrs
+    cidr_blocks = [var.admin_cidr]
   }
 
   # Egress all: Bedrock, SSM, KMS, git clone, docker pulls, and Atlas SRV DNS.

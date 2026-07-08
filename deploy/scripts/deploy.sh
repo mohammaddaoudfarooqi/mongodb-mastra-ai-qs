@@ -67,7 +67,7 @@ preflight() {
   if [[ "$create" == "true" ]]; then
     [[ -n "${TF_VAR_atlas_public_key:-}"  ]] || die "TF_VAR_atlas_public_key is required (create mode)."
     [[ -n "${TF_VAR_atlas_private_key:-}" ]] || die "TF_VAR_atlas_private_key is required (create mode)."
-    [[ -n "${TF_VAR_atlas_org_id:-}" || -n "$(tfvar atlas_project_id)" ]] || die "Set TF_VAR_atlas_org_id (to create a project) or atlas_project_id in tfvars."
+    [[ -n "${TF_VAR_atlas_project_id:-}" || -n "$(tfvar atlas_project_id)" || -n "${TF_VAR_atlas_org_id:-}" ]] || die "Set TF_VAR_atlas_project_id (deploy into an existing project) or TF_VAR_atlas_org_id (create a new project, needs the Project-Creator org role)."
     assert_no_overlap "$(tfvar atlas_cidr | grep -o '[0-9.]*/[0-9]*' || echo 192.168.248.0/21)" "$(tfvar vpc_cidr | grep -o '[0-9.]*/[0-9]*' || echo 10.0.0.0/16)"
   else
     [[ -n "${TF_VAR_mongodb_uri_byo:-}" ]] || die "create_atlas_cluster=false requires TF_VAR_mongodb_uri_byo."
@@ -217,13 +217,13 @@ main() {
   bootstrap_data
   health_poll
 
-  local ip; ip=$(tf output -raw public_ip)
+  local dns; dns=$(tf output -raw public_dns)
   echo ""
   ok "Deployed."
-  echo "   App URL : ${C_G}http://$ip/${C_0}"
-  echo "   Studio  : http://$ip:4111/   (Mastra dev/observability UI)"
-  echo "   SSH     : ssh ec2-user@$ip"
-  echo "   Verify  : BASE_URL=http://$ip pnpm verify:demo"
-  echo "   Logs    : ssh ec2-user@$ip 'tail -f /var/log/deploy.log'"
+  echo "   App URL : ${C_G}http://$dns/${C_0}"
+  echo "   Studio  : http://$dns:4111/   (Mastra dev/observability UI)"
+  echo "   SSH     : ssh ec2-user@$dns"
+  echo "   Verify  : BASE_URL=http://$dns pnpm verify:demo"
+  echo "   Logs    : ssh ec2-user@$dns 'tail -f /var/log/deploy.log'"
 }
 main "$@"
