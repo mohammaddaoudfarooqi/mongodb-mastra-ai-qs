@@ -63,7 +63,10 @@ ssh ec2-user@<public-ip> 'getent hosts <cluster-shard-host>'   # should resolve 
 ```
 
 - Storefront: `http://<public-ip>/`
-- Mastra Studio: `http://<public-ip>:4111/` (scoped to `web_cidr`; lock it down if the demo network is public)
+- Mastra Studio: `http://<public-ip>:4111/`
+
+All ports (22/80/443/8000/4111) are scoped to `admin_cidr` only — nothing is public. Set
+`admin_cidr` to your VPN CIDR so the storefront and Studio are reachable over the VPN.
 
 ## Teardown
 

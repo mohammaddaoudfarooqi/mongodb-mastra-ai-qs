@@ -1,6 +1,6 @@
 resource "aws_security_group" "app" {
   name        = "${var.name_prefix}-app-sg"
-  description = "Mastra concierge app: SSH from admin, web from web_cidr, egress all."
+  description = "Mastra concierge app: all ingress from admin_cidr (VPN), egress all."
   vpc_id      = aws_vpc.main.id
   tags        = { Name = "${var.name_prefix}-app-sg" }
 
@@ -17,7 +17,7 @@ resource "aws_security_group" "app" {
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
-    cidr_blocks = [var.web_cidr]
+    cidr_blocks = [var.admin_cidr]
   }
 
   ingress {
@@ -25,7 +25,7 @@ resource "aws_security_group" "app" {
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
-    cidr_blocks = [var.web_cidr]
+    cidr_blocks = [var.admin_cidr]
   }
 
   ingress {
@@ -41,7 +41,7 @@ resource "aws_security_group" "app" {
     from_port   = 4111
     to_port     = 4111
     protocol    = "tcp"
-    cidr_blocks = [var.web_cidr]
+    cidr_blocks = [var.admin_cidr]
   }
 
   # Egress all: Bedrock, SSM, KMS, git clone, docker pulls, and Atlas SRV DNS.

@@ -50,14 +50,8 @@ variable "expire_on" {
 
 # ── Access control ────────────────────────────────────────────────────────────
 variable "admin_cidr" {
-  description = "Your public IP as a /32 — allowed for SSH (22) and, in create mode, added to the Atlas access list so the deploy machine can seed the cluster over the public path. The wrapper auto-detects this when unset."
+  description = "CIDR (typically the VPN range or your public IP /32) allowed to reach ALL app ports — SSH (22), HTTP/HTTPS (80/443), the app (8000), and Mastra Studio (4111). In create mode it is also added to the Atlas access list so the deploy machine can seed the cluster over the public path. The wrapper auto-detects a /32 when unset."
   type        = string
-}
-
-variable "web_cidr" {
-  description = "CIDR allowed to reach the app on 80/443. 0.0.0.0/0 for a public demo; scope to the venue network to lock it down."
-  type        = string
-  default     = "0.0.0.0/0"
 }
 
 # ── Networking (CIDR non-overlap is load-bearing for peering) ─────────────────
