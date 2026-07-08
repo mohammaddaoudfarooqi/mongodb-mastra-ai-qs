@@ -1,6 +1,7 @@
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createAmazonBedrock } from '@ai-sdk/amazon-bedrock';
+import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 import type { Config } from '../config';
 
 const MAX_TOKENS: Record<string, number> = {
@@ -102,9 +103,16 @@ export function getLLM(cfg: Config, modelOverride?: string): ReturnType<ReturnTy
       return createOpenAI(cfg.llmBaseUrl ? { baseURL: cfg.llmBaseUrl } : {})(model);
     case 'bedrock': {
       // Region: explicit cfg.bedrockRegion wins; else the SDK reads AWS_REGION from the env
-      // (set by the EC2 UserData). Auth is the instance role via the AWS default credential
-      // chain — no API key. A baseURL override is honored if set (rare; e.g. a private endpoint).
-      const opts: Parameters<typeof createAmazonBedrock>[0] = {};
+      // (set by the EC2 UserData). A baseURL override is honored if set (rare).
+      //
+      // Auth: the @ai-sdk/amazon-bedrock v5 provider does NOT fall back to the AWS default
+      // credential chain on its own — without static AWS_ACCESS_KEY_ID it throws "AWS SigV4
+      // authentication requires AWS credentials". So hand it a credentialProvider backed by
+      // fromNodeProviderChain(), which resolves the EC2 instance role via IMDS (no API key on
+      // the box). Locally it picks up env vars / shared config the same way the AWS CLI does.
+      const opts: Parameters<typeof createAmazonBedrock>[0] = {
+        credentialProvider: fromNodeProviderChain(),
+      };
       if (cfg.bedrockRegion) opts.region = cfg.bedrockRegion;
       if (cfg.llmBaseUrl) opts.baseURL = cfg.llmBaseUrl;
       return createAmazonBedrock(opts)(model);

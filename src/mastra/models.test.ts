@@ -14,10 +14,17 @@ vi.mock('@ai-sdk/openai', () => ({
 }));
 
 vi.mock('@ai-sdk/amazon-bedrock', () => ({
-  createAmazonBedrock: vi.fn(),
+  createAmazonBedrock: vi.fn(() => vi.fn()),
 }));
 
-import { maxTokensFor, temperatureFor, modelChoices, MODEL_CATALOG, BEDROCK_MODEL_CATALOG } from './models';
+const fakeCredentialProvider = vi.fn();
+vi.mock('@aws-sdk/credential-providers', () => ({
+  fromNodeProviderChain: vi.fn(() => fakeCredentialProvider),
+}));
+
+import { createAmazonBedrock } from '@ai-sdk/amazon-bedrock';
+import { maxTokensFor, temperatureFor, modelChoices, getLLM, MODEL_CATALOG, BEDROCK_MODEL_CATALOG } from './models';
+import type { Config } from '../config';
 
 describe('model helpers', () => {
   it('maps known models to token caps and defaults unknown to 4096', () => {
@@ -67,5 +74,25 @@ describe('modelChoices (GET /models catalog)', () => {
   it('keeps the Anthropic catalog for the default (non-bedrock) provider', () => {
     expect(modelChoices('claude-sonnet-4-6', 'anthropic').map(c => c.id))
       .toEqual(MODEL_CATALOG.map(m => m.id));
+  });
+});
+
+describe('getLLM bedrock auth', () => {
+  it('passes a credentialProvider (instance-role via IMDS) and the region to Bedrock', () => {
+    // Regression guard: @ai-sdk/amazon-bedrock v5 does NOT use the AWS default credential
+    // chain on its own — without a credentialProvider it throws "AWS SigV4 authentication
+    // requires AWS credentials" on the EC2 box (no static keys, only the instance role).
+    vi.mocked(createAmazonBedrock).mockClear();
+    const cfg = {
+      llmProvider: 'bedrock',
+      llmModel: 'us.anthropic.claude-sonnet-4-5-20250929-v1:0',
+      bedrockRegion: 'us-west-2',
+    } as unknown as Config;
+
+    getLLM(cfg);
+
+    const opts = vi.mocked(createAmazonBedrock).mock.calls[0][0];
+    expect(opts?.credentialProvider).toBe(fakeCredentialProvider);
+    expect(opts?.region).toBe('us-west-2');
   });
 });
