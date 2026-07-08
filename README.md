@@ -51,6 +51,41 @@ docker compose up -d --build                    # app only (storefront + API on 
 docker compose --profile studio up -d --build   # app + Mastra Studio (:4111)
 ```
 
+## Deploy to AWS (one command)
+
+The local Docker path above runs against your own Atlas cluster. To stand up the whole stack in
+the cloud instead, `deploy/` has a one-command Terraform deploy: an EC2 box running the app in
+Docker behind nginx, a co-located **Atlas M10** reached over **AWS↔Atlas VPC peering** (round-trips
+drop from ~250 ms to ~1–5 ms), the LLM on **AWS Bedrock** via the instance role (no API key on the
+box), and app secrets delivered through **SSM Parameter Store**. Co-locating the app with Atlas and
+moving the LLM in-region is the biggest latency lever for a live demo.
+
+Before you start, enable **Bedrock model access** for the Claude models you expose (both Sonnet 4.5
+and Haiku 4.5) in your target region — approval can take hours, so do it first.
+
+```bash
+cp deploy/terraform/terraform.tfvars.example deploy/terraform/terraform.tfvars
+# edit terraform.tfvars: aws_region, cluster names, bedrock_model_id, etc. (non-secret)
+
+export TF_VAR_atlas_public_key=...      # secrets via env, never in the file
+export TF_VAR_atlas_private_key=...
+export TF_VAR_atlas_project_id=...      # deploy into an existing project (recommended)
+export TF_VAR_voyage_api_key=...
+
+deploy/scripts/deploy.sh                # add --yes to skip the apply confirmation
+```
+
+The wrapper handles everything end to end (~15–20 min): preflight and a Bedrock model-access probe,
+`terraform apply`, wait for peering to go **ACTIVE**, seed Atlas from your machine, then health-poll
+the public URL. It prints the storefront URL (`http://<public-ip>/`), Studio URL
+(`http://<public-ip>:4111/`), the SSH command, and a `verify:demo` reminder. Bring your own cluster
+with `create_atlas_cluster = false` + `TF_VAR_mongodb_uri_byo`. Tear it all down with
+`deploy/scripts/destroy.sh`.
+
+Every app port is scoped to network ranges you set in `terraform.tfvars`, so nothing is world-open.
+See [`deploy/README.md`](deploy/README.md) for the full prerequisites, variables, BYO-cluster path,
+Bedrock model-id notes, and teardown.
+
 ## Prerequisites
 
 - Node 22 or newer, pnpm (backend), npm (frontend).
