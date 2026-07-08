@@ -57,8 +57,7 @@ The local Docker path above runs against your own Atlas cluster. To stand up the
 the cloud instead, `deploy/` has a one-command Terraform deploy: an EC2 box running the app in
 Docker behind nginx, a co-located **Atlas M10** reached over **AWS↔Atlas VPC peering** (round-trips
 drop from ~250 ms to ~1–5 ms), the LLM on **AWS Bedrock** via the instance role (no API key on the
-box), and app secrets delivered through **SSM Parameter Store**. Co-locating the app with Atlas and
-moving the LLM in-region is the biggest latency lever for a live demo.
+box), and app secrets delivered through **SSM Parameter Store**.
 
 Before you start, enable **Bedrock model access** for the Claude models you expose (both Sonnet 4.5
 and Haiku 4.5) in your target region — approval can take hours, so do it first.
