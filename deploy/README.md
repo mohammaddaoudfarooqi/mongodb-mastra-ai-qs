@@ -43,11 +43,17 @@ deploy/scripts/deploy.sh                # add --yes to skip the apply confirmati
 ```
 
 The wrapper runs: preflight (tool + credential checks, a **Bedrock model-access probe** that
-aborts early if Claude isn't enabled, CIDR-overlap assertion, auto-detects your public IP for
-SSH/seed access, generates an alphanumeric Atlas password) → `terraform apply` (with a
-transient-error retry for Atlas/peering propagation) → wait for peering **ACTIVE** → wait for
-the box's bootstrap marker → **seed Atlas from your machine** (`provision`/`seed`/`embed`/`prewarm`)
-→ health-poll the public URL. It prints the app URL, SSH command, and a `verify:demo` reminder.
+aborts early if any picker model — Sonnet AND Haiku — isn't enabled, CIDR-overlap assertion,
+auto-detects your public IP for SSH/seed access, generates the Atlas DB password) →
+`terraform apply` (with a transient-error retry for Atlas/peering propagation) → wait for peering
+**ACTIVE** → wait for the box's bootstrap marker → **seed Atlas from your machine**
+(`provision`/`seed`/`embed`/`prewarm`) → health-poll the public URL. It prints the app URL, SSH
+command, and a `verify:demo` reminder.
+
+The Atlas DB user defaults to `mastra_concierge`. The password is generated once (28 alphanumeric
+chars, no URL-encoding needed) and persisted to `deploy/.deploy-secrets.env` (gitignored), so every
+later run and any bare `terraform apply` reuses the same password instead of resetting the DB user.
+Set `TF_VAR_atlas_db_password` to pin your own; set `atlas_db_username` in tfvars to rename the user.
 
 Expect ~15–20 min end to end: the Atlas M10 is ~7–15 min and the on-box docker build ~5–8 min.
 

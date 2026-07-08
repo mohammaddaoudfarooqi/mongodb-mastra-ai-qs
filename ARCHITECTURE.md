@@ -2,9 +2,10 @@
 
 A reference architecture for building an AI shopping concierge on **one MongoDB Atlas cluster**.
 The same cluster is the operational database, the vector store, the agent memory, the semantic
-response cache, the order ledger, and the workflow-snapshot store, with no second datastore.
+response cache, the order ledger, the workflow-snapshot store, and the application log store, with
+no second datastore.
 
-## One cluster, six roles
+## One cluster, seven roles
 
 ```
                          ┌──────────────────────────────────────────────┐
@@ -16,13 +17,18 @@ response cache, the order ledger, and the workflow-snapshot store, with no secon
   (src/server, src/mastra)│  semantic_response_cache   (vector + TTL)     │
         │                 │  orders + products.stock   (transactions)     │
         ▼                 │  mastra_workflow_snapshot  (suspend/resume)   │
-  Concierge router  ──────┤                                               │
+  Concierge router  ──────┤  app_logs                  (logs, TTL)         │
    ├─ knowledge  spec.    └──────────────────────────────────────────────┘
    ├─ dealsAndCart spec.
    └─ place-order workflow (HITL)
-        ▲   Voyage embeddings + rerank (multimodal)   LLM (Anthropic-compatible)
+        ▲   Voyage embeddings + rerank (multimodal)   LLM (Anthropic / Bedrock)
         └── external model calls
 ```
+
+Observability is the one signal that does not live on Atlas. MongoDB's observability store keeps
+traces and spans, but not metrics (it has no aggregation), so the Mastra instance routes only the
+observability metrics domain to an in-memory store and keeps everything else on Atlas. Studio's
+metrics panel reads that in-memory store; it resets on restart.
 
 The frontend talks only to `/api/*` (SSE for chat). Mastra's own routes live under `/mastra/api`
 so `/api/*` is free for the app's handlers; the same handler functions mount on both the standalone
@@ -52,6 +58,8 @@ deploy surfaces never drift.
 | Cart | `src/mastra/tools/cart.ts` | `carts` |
 | Order workflow (HITL) | `src/mastra/workflows/place-order.ts`, `src/mastra/tools/checkout.ts`, `src/server/order-runner.ts`, `src/server/routes.ts` (`resume`) | `orders` + `products.stock` + `carts` (transaction), `mastra_workflow_snapshot` |
 | SSE framing | `src/server/sse.ts` (`toCartsmithFrames`) | — |
+| App logging | `src/observability/logger.ts` (`LogSink`), `src/observability/mongo-log-sink.ts` | `app_logs` (buffered writes, TTL) |
+| Observability / Studio metrics | `src/mastra/index.ts` (`Observability` + in-memory metrics domain) | traces on Atlas, metrics in-memory |
 | DI / route registration | `src/mastra/index.ts` (`buildMastra`), `src/server/app.ts` (`createApp`) | top-level workflow `storage` |
 
 ## Order workflow: suspend / resume across two requests
