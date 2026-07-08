@@ -38,7 +38,12 @@ data "aws_iam_policy_document" "app" {
       "ssm:GetParameters",
       "ssm:GetParametersByPath",
     ]
-    resources = ["arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${local.ssm_prefix}/*"]
+    # Two ARNs: the child params (/mastra-ai4/env/*) for Get(s)Parameter, and the path
+    # node itself (/mastra-ai4/env) which GetParametersByPath authorizes against.
+    resources = [
+      "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${local.ssm_prefix}",
+      "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${local.ssm_prefix}/*",
+    ]
   }
 
   statement {
