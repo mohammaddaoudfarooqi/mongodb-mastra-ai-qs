@@ -1,4 +1,4 @@
-# MongoDB x Mastra "Better Together" Quickstart
+# MongoDB x Mastra Agentic AI Quickstart
 
 A retail shopping concierge that showcases MongoDB x Mastra capabilities, all on a single Atlas
 cluster: multimodal retrieval (Voyage multimodal embeddings), hybrid search with reranking (RRF +
