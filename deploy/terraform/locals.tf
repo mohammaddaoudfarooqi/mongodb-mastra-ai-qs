@@ -47,10 +47,14 @@ locals {
   _srv_host   = local.use_atlas ? replace(mongodbatlas_advanced_cluster.cluster[0].connection_strings.standard_srv, "mongodb+srv://", "") : ""
   mongodb_uri = local.use_atlas ? "mongodb+srv://${var.atlas_db_username}:${var.atlas_db_password}@${local._srv_host}/?retryWrites=true&w=majority" : var.mongodb_uri_byo
 
-  # Bedrock ARNs for the scoped instance-role policy. A cross-region inference profile
-  # invokes the underlying foundation model in multiple regions, so the FM resource keeps
-  # the wildcard-region form (arn:aws:bedrock:*::foundation-model/...) the profile requires.
-  bedrock_profile_arn = "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/${var.bedrock_model_id}"
+  # Bedrock ARNs for the scoped instance-role policy. The UI model picker offers EVERY id in
+  # the app's BEDROCK_MODEL_CATALOG (Sonnet AND Haiku), so the policy must authorize invoke on
+  # every Claude inference profile — not just var.bedrock_model_id. Scoping to a single profile
+  # made switching to Haiku fail with a Bedrock 403 (surfaced as AI_APICallError: Forbidden).
+  # Wildcard the profile suffix (still bound to this account + region + Anthropic Claude), which
+  # covers the whole catalog. A cross-region inference profile invokes the underlying foundation
+  # model in multiple regions, so the FM resource keeps the wildcard-region form the profile requires.
+  bedrock_profile_arn = "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/us.anthropic.claude-*"
   bedrock_fm_arn      = "arn:aws:bedrock:*::foundation-model/anthropic.claude-*"
 
   # Atlas rejects tags with blank values (HTTP 400 TAG_VALUE_BLANK), so drop any empty
@@ -77,6 +81,9 @@ locals {
     DEFAULT_USER_ID                     = var.default_user_id
     AUTH_MODE                           = var.auth_mode
     PORT                                = var.app_port
+    APP_LOG_MONGO_ENABLED               = var.app_log_mongo_enabled
+    APP_LOG_COLLECTION                  = var.app_log_collection
+    APP_LOG_RETENTION_DAYS              = var.app_log_retention_days
   }
 
   # Secret env → SSM SecureString params.

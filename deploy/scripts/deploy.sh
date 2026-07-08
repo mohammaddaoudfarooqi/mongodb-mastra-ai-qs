@@ -88,18 +88,38 @@ preflight() {
     ok "generated Atlas DB password (28 alnum chars)"
   fi
 
-  # Bedrock model-access probe — the longest-lead-time failure. Abort NOW if the profile
-  # isn't enabled in the account/region (enablement can take hours–days).
+  # Bedrock model-access probe — the longest-lead-time failure. Abort NOW if a required
+  # profile isn't enabled in the account/region (enablement can take hours–days). The UI
+  # model picker offers EVERY id in the app's BEDROCK_MODEL_CATALOG (Sonnet AND Haiku), and
+  # the instance-role policy authorizes all of them (see locals.tf bedrock_profile_arn), so
+  # probe the WHOLE catalog — not just the default bedrock_model_id. Probing only the default
+  # is how a live demo silently 403s the moment someone switches the picker to Haiku.
   local model; model=$(tfvar bedrock_model_id); model=${model:-us.anthropic.claude-sonnet-4-5-20250929-v1:0}
   local provider; provider=$(tfvar llm_provider); provider=${provider:-bedrock}
+  # The app's Bedrock catalog (keep in sync with src/mastra/models.ts BEDROCK_MODEL_CATALOG).
+  # Always include the configured default in case it differs from these.
+  local required_profiles=(
+    "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    "$model"
+  )
   if [[ "$provider" == "bedrock" ]]; then
     if aws bedrock list-inference-profiles --region "$region" >/dev/null 2>&1; then
-      if ! aws bedrock list-inference-profiles --region "$region" --query 'inferenceProfileSummaries[].inferenceProfileId' --output text 2>/dev/null | tr '\t' '\n' | grep -qx "$model"; then
-        warn "Bedrock profile '$model' not found among enabled profiles in $region."
+      local enabled; enabled=$(aws bedrock list-inference-profiles --region "$region" \
+        --query 'inferenceProfileSummaries[].inferenceProfileId' --output text 2>/dev/null | tr '\t' '\n')
+      local missing=() p
+      for p in "${required_profiles[@]}"; do
+        grep -qx "$p" <<<"$enabled" || missing+=("$p")
+      done
+      # De-dup missing (default may equal a catalog entry).
+      if (( ${#missing[@]} > 0 )); then
+        local uniq_missing; uniq_missing=$(printf '%s\n' "${missing[@]}" | sort -u | tr '\n' ' ')
+        warn "Bedrock profile(s) NOT enabled in $region: $uniq_missing"
+        warn "The UI model picker offers Sonnet AND Haiku; a missing profile 403s (AI_APICallError: Forbidden) when selected."
         warn "Enable Claude model access: https://console.aws.amazon.com/bedrock/home?region=$region#/modelaccess"
-        $AUTO_YES || { read -r -p "Continue anyway? [y/N] " a; [[ "$a" == "y" || "$a" == "Y" ]] || die "aborted — enable Bedrock model access first."; }
+        $AUTO_YES || { read -r -p "Continue anyway? [y/N] " a; [[ "$a" == "y" || "$a" == "Y" ]] || die "aborted — enable Bedrock model access for all catalog models first."; }
       else
-        ok "Bedrock profile enabled: $model"
+        ok "Bedrock profiles enabled: Sonnet + Haiku"
       fi
     else
       warn "could not list Bedrock inference profiles (permissions?) — skipping the access probe."

@@ -171,6 +171,16 @@ mis-pointed `.env` wiping the wrong database.
   MongoDB-hosted Voyage endpoint (`VOYAGE_BASE_URL`, default `https://ai.mongodb.com/v1`).
 - Human-in-the-loop checkout is implemented: the storefront's approval card drives the order
   workflow via the `/api/interrupts/resume` SSE flow.
+- **App logs are persisted to MongoDB.** Every log line still prints to stdout/stderr; when
+  `APP_LOG_MONGO_ENABLED=true` (default) it is also written to the `app_logs` collection
+  (`APP_LOG_COLLECTION`) — buffered, fail-open, and TTL-pruned after `APP_LOG_RETENTION_DAYS`
+  (default 30). A logging failure never blocks a request.
+- **Bulk cart-add is intent-gated.** A normal "add X" request adds exactly one product (the
+  anti-ballooning guard); only an explicit multi/all request ("add all", "one each") lifts the
+  per-turn cap. The agent reports true `cartAdd` results and reads totals from `cartRead` — it
+  never fabricates line counts or cart totals.
+- **Studio metrics** use an in-memory observability store (MongoDB persists traces but not
+  metrics), so the Mastra Studio metrics panel populates. In-memory metrics reset on restart.
 
 ### Authentication
 

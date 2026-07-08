@@ -220,6 +220,25 @@ variable "app_port" {
   default = "8000"
 }
 
+# ── App logging to MongoDB ────────────────────────────────────────────────────
+# App logs always go to stdout/stderr (Docker json-file on the box); when enabled they are
+# ALSO persisted to a MongoDB collection (buffered, fail-open, TTL-pruned) so logs survive
+# container restarts and are queryable in Atlas.
+variable "app_log_mongo_enabled" {
+  type    = string
+  default = "true"
+}
+
+variable "app_log_collection" {
+  type    = string
+  default = "app_logs"
+}
+
+variable "app_log_retention_days" {
+  type    = string
+  default = "30"
+}
+
 # ── App secret (→ SSM SecureString) ───────────────────────────────────────────
 variable "voyage_api_key" {
   description = "Voyage API key (works against the MongoDB-hosted endpoint)."

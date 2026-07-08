@@ -109,3 +109,21 @@ aws bedrock list-inference-profiles --region us-west-2 \
 
 Set the chosen id as `bedrock_model_id` in tfvars (it flows to `LLM_MODEL` on the box, and the
 app's `BEDROCK_MODEL_CATALOG` surfaces the picker options).
+
+**Enable model access for the WHOLE catalog, not just the default.** The UI model picker
+offers every id in `BEDROCK_MODEL_CATALOG` — currently **both** Sonnet 4.5 and Haiku 4.5. The
+instance-role policy authorizes invoke on all `us.anthropic.claude-*` inference profiles
+(`locals.tf` `bedrock_profile_arn` uses a wildcard), and `deploy.sh` preflight probes that both
+profiles are enabled. If you enable only Sonnet, switching the picker to Haiku returns a Bedrock
+403 (`AI_APICallError: Forbidden`). Enable access for every model you expose in the picker.
+
+## App logs + observability
+
+- **App logs → MongoDB:** logs always go to the container's stdout/stderr (`docker compose logs
+  -f app`). When `APP_LOG_MONGO_ENABLED=true` (default) they are also written to the
+  `APP_LOG_COLLECTION` collection (default `app_logs`) in the app database — buffered,
+  fail-open, and TTL-pruned after `APP_LOG_RETENTION_DAYS` (default 30). Query them in Atlas or
+  `db.app_logs.find().sort({ts:-1})`. These flow from tfvars → SSM → `/opt/app/.env`.
+- **Studio metrics:** the app configures an in-memory observability store for the metrics
+  domain (MongoDB persists traces/spans but not metrics), so Mastra Studio's metrics panel
+  populates. In-memory metrics are per-process and reset on restart — expected for the demo.
