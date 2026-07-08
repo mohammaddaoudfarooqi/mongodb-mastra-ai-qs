@@ -76,7 +76,10 @@ export function buildMastra(cfg: Config = loadConfig()) {
       apiRoutes: [
         ...buildApiRoutes(rc),
         // SPA fallback registered last: serves frontend/dist for any non-API GET.
-        buildSpaRoute(),
+        // Skip it under Mastra Studio (`mastra dev`, NODE_ENV=development) — there the
+        // built-in playground owns `/`, and a `/*` catch-all would shadow it (and 503 on
+        // the relative dist path, since dev runs from a different cwd).
+        ...(process.env.NODE_ENV === 'development' ? [] : [buildSpaRoute()]),
       ],
     },
   });

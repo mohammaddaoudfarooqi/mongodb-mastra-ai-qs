@@ -83,6 +83,23 @@ describe('buildMastra (INV-007: concierge agent + REQ-E-003: apiPrefix)', () => 
     // SPA fallback present and registered LAST.
     expect((routes[routes.length - 1] as any).path).toBe('/*');
   });
+
+  // Under Mastra Studio (`mastra dev`, NODE_ENV=development) the built-in playground
+  // owns `/`; our storefront `/*` catch-all must NOT be registered there or it shadows
+  // the playground and 503s ("SPA not built") on the relative dist path.
+  it('omits the storefront /* SPA fallback in development (Studio owns /)', async () => {
+    const prev = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'development';
+    try {
+      const mastra = (await mod()).buildMastra(cfg);
+      const paths = (mastra.getServer()?.apiRoutes ?? []).map(r => (r as any).path);
+      expect(paths).not.toContain('/*');
+      // The API routes are still present in dev.
+      expect(paths).toContain('/api/health');
+    } finally {
+      process.env.NODE_ENV = prev;
+    }
+  });
 });
 
 describe('buildApiRoutes handlers are invokable (REQ-E-002 / boundary #2)', () => {
