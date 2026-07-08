@@ -17,7 +17,7 @@ vi.mock('@ai-sdk/amazon-bedrock', () => ({
   createAmazonBedrock: vi.fn(),
 }));
 
-import { maxTokensFor, temperatureFor, modelChoices, MODEL_CATALOG } from './models';
+import { maxTokensFor, temperatureFor, modelChoices, MODEL_CATALOG, BEDROCK_MODEL_CATALOG } from './models';
 
 describe('model helpers', () => {
   it('maps known models to token caps and defaults unknown to 4096', () => {
@@ -50,5 +50,22 @@ describe('modelChoices (GET /models catalog)', () => {
     const choices = modelChoices('some-custom-deploy-model');
     expect(choices[0]).toEqual({ id: 'some-custom-deploy-model', label: 'some-custom-deploy-model' });
     expect(choices.length).toBe(MODEL_CATALOG.length + 1);
+  });
+
+  it('surfaces the Bedrock inference-profile catalog when provider is bedrock', () => {
+    // Bedrock rejects the plain Anthropic ids, so the picker must offer profile ids instead.
+    const bedrockDefault = BEDROCK_MODEL_CATALOG[0].id;
+    const choices = modelChoices(bedrockDefault, 'bedrock');
+    const ids = choices.map(c => c.id);
+    expect(ids).toEqual(BEDROCK_MODEL_CATALOG.map(m => m.id));
+    expect(ids[0]).toBe(bedrockDefault);
+    // All Bedrock ids are cross-region inference profiles (us. prefix), never bare Anthropic ids.
+    expect(ids.every(id => id.startsWith('us.anthropic.'))).toBe(true);
+    expect(ids).not.toContain('claude-sonnet-4-6');
+  });
+
+  it('keeps the Anthropic catalog for the default (non-bedrock) provider', () => {
+    expect(modelChoices('claude-sonnet-4-6', 'anthropic').map(c => c.id))
+      .toEqual(MODEL_CATALOG.map(m => m.id));
   });
 });

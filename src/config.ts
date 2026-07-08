@@ -3,6 +3,9 @@ import { z } from 'zod';
 export interface Config {
   mongoUri: string; mongoDb: string; voyageApiKey: string; voyageBaseUrl?: string;
   llmProvider: 'anthropic' | 'openai' | 'bedrock'; llmModel: string; llmBaseUrl?: string; llmGatewayApiKey?: string;
+  // AWS region for the Bedrock client (LLM_PROVIDER=bedrock). Optional: when unset the AWS SDK
+  // reads AWS_REGION from the environment (set by the EC2 UserData). Ignored by other providers.
+  bedrockRegion?: string;
   memoryEmbedModel?: string;
   allowInsecure: boolean;
   responseCache: { enabled: boolean; ttlDays: number; similarityThreshold: number; maxAnswerBytes: number };
@@ -37,6 +40,7 @@ const schema = z.object({
   LLM_PROVIDER: z.enum(['anthropic', 'openai', 'bedrock']).default('anthropic'),
   LLM_MODEL: z.string().min(1),
   LLM_BASE_URL: z.string().optional(),
+  BEDROCK_REGION: z.string().optional(),
   GROVE_API_KEY: z.string().optional(),
   ALLOW_INSECURE: z.string().optional(),
   INGEST_ASSETS_DIR: z.string().optional(),
@@ -60,6 +64,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     llmProvider: parsed.LLM_PROVIDER,
     llmModel: parsed.LLM_MODEL,
     llmBaseUrl: parsed.LLM_BASE_URL || undefined,
+    bedrockRegion: parsed.BEDROCK_REGION || undefined,
     llmGatewayApiKey: parsed.GROVE_API_KEY || undefined,
     allowInsecure,
     responseCache: {

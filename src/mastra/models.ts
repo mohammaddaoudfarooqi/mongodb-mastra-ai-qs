@@ -10,6 +10,9 @@ const MAX_TOKENS: Record<string, number> = {
   'claude-haiku-4-5': 8192,
   'gpt-4o': 8192,
   'meta.llama4-maverick': 4096,
+  // Bedrock cross-region inference-profile ids (see BEDROCK_MODEL_CATALOG).
+  'us.anthropic.claude-sonnet-4-5-20250929-v1:0': 8192,
+  'us.anthropic.claude-3-5-haiku-20241022-v1:0': 8192,
 };
 
 /** Models that reject an explicit temperature field entirely. */
@@ -41,16 +44,32 @@ export const MODEL_CATALOG: ModelChoice[] = [
 ];
 
 /**
+ * Bedrock catalog. Bedrock does NOT accept the plain Anthropic-API ids above — it needs
+ * cross-region INFERENCE-PROFILE ids (the `us.` prefix routes the invocation to whichever
+ * of us-east-1/2 / us-west-2 has capacity). These are the ids surfaced when LLM_PROVIDER=bedrock;
+ * verify the exact profile ids enabled in the target account/region with
+ * `aws bedrock list-inference-profiles --region us-west-2` before a deploy, and update here.
+ */
+export const BEDROCK_MODEL_CATALOG: ModelChoice[] = [
+  { id: 'us.anthropic.claude-sonnet-4-5-20250929-v1:0', label: 'Claude Sonnet 4.5 (Bedrock, balanced)' },
+  { id: 'us.anthropic.claude-3-5-haiku-20241022-v1:0', label: 'Claude Haiku 3.5 (Bedrock, fast)' },
+];
+
+/**
  * Build the model list for GET /models: the curated catalog with the configured default
  * guaranteed present and listed first (dedup by id, preserving catalog order otherwise).
+ * The catalog is provider-specific: Bedrock uses inference-profile ids, so on
+ * `provider==='bedrock'` we surface BEDROCK_MODEL_CATALOG instead of the Anthropic ids
+ * (which Bedrock would reject if a user picked one).
  */
-export function modelChoices(defaultModel: string): ModelChoice[] {
+export function modelChoices(defaultModel: string, provider?: Config['llmProvider']): ModelChoice[] {
+  const catalog = provider === 'bedrock' ? BEDROCK_MODEL_CATALOG : MODEL_CATALOG;
   const out: ModelChoice[] = [];
   const seen = new Set<string>();
   const push = (c: ModelChoice) => { if (!seen.has(c.id)) { seen.add(c.id); out.push(c); } };
-  const configured = MODEL_CATALOG.find(m => m.id === defaultModel);
+  const configured = catalog.find(m => m.id === defaultModel);
   push(configured ?? { id: defaultModel, label: defaultModel });
-  for (const m of MODEL_CATALOG) push(m);
+  for (const m of catalog) push(m);
   return out;
 }
 
@@ -81,8 +100,15 @@ export function getLLM(cfg: Config, modelOverride?: string): ReturnType<ReturnTy
     }
     case 'openai':
       return createOpenAI(cfg.llmBaseUrl ? { baseURL: cfg.llmBaseUrl } : {})(model);
-    case 'bedrock':
-      return createAmazonBedrock(cfg.llmBaseUrl ? { baseURL: cfg.llmBaseUrl } : {})(model);
+    case 'bedrock': {
+      // Region: explicit cfg.bedrockRegion wins; else the SDK reads AWS_REGION from the env
+      // (set by the EC2 UserData). Auth is the instance role via the AWS default credential
+      // chain — no API key. A baseURL override is honored if set (rare; e.g. a private endpoint).
+      const opts: Parameters<typeof createAmazonBedrock>[0] = {};
+      if (cfg.bedrockRegion) opts.region = cfg.bedrockRegion;
+      if (cfg.llmBaseUrl) opts.baseURL = cfg.llmBaseUrl;
+      return createAmazonBedrock(opts)(model);
+    }
     default:
       throw new Error(`Unsupported LLM_PROVIDER: ${cfg.llmProvider}`);
   }

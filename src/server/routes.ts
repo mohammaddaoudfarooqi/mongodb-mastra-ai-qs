@@ -280,7 +280,9 @@ export const handlers = {
 
   models: (rc: RouteContext) => (c: Context): Response => c.json({
     default: rc.cfg.llmModel,
-    models: modelChoices(rc.cfg.llmModel),
+    // Pass the provider so a Bedrock deploy surfaces inference-profile ids (not the
+    // Anthropic-API ids Bedrock rejects).
+    models: modelChoices(rc.cfg.llmModel, rc.cfg.llmProvider),
   }),
 
   // The frontend's AuthProvider calls GET /auth/me on mount and throws on non-2xx.
