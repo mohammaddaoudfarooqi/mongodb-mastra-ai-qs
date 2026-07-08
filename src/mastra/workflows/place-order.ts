@@ -22,7 +22,7 @@ import { computeCartTotals, cartFingerprint, type CartLine } from '../tools/cart
 const InputSchema = z.object({
   userId: z.string(),
   threadId: z.string(),
-  now: z.string(),      // ISO-8601 timestamp, supplied by the caller
+  now: z.string(),      // ISO-8601 timestamp, supplied by the caller; stored as a BSON Date in placeOrder
   orderId: z.string(),  // unique order id, supplied by the caller
 });
 
@@ -184,7 +184,10 @@ export function buildOrderSteps(db: Db) {
             coupons_used: couponsUsed,
             savings_usd: quote.total_savings,
             total_usd: quote.total_usd,
-            placed_at: init.now,
+            // Persist as a BSON Date. `init.now` is the ISO string carried through the
+            // JSON-serialized workflow snapshot (it must stay a string in transit across
+            // suspend→resume); convert to a Date only here, at the storage boundary.
+            placed_at: new Date(init.now),
           }, { session });
           // Conditional decrement re-checks stock INSIDE the transaction (TOCTOU): if
           // inventory dropped below qty since the quote, modifiedCount is 0 and we abort

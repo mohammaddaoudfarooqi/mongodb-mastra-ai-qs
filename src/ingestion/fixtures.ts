@@ -44,7 +44,7 @@ export function generateOrders(products: Product[], count = 20): Order[] {
       status: STATUSES[i % STATUSES.length],
       items,
       total_usd: Number(total.toFixed(2)),
-      placed_at: `2026-0${(i % 6) + 1}-15T10:00:00.000Z`,
+      placed_at: new Date(`2026-0${(i % 6) + 1}-15T10:00:00.000Z`),
     });
   }
   return orders;
@@ -57,8 +57,8 @@ export function generatePromotions(count = 5): Promotion[] {
     discount_pct: (i + 1) * 5,
     applies_to_category: CATEGORIES[i % CATEGORIES.length],
     product_ids: [],
-    starts_at: '2026-06-01T00:00:00.000Z',
-    ends_at: '2026-09-01T00:00:00.000Z',
+    starts_at: new Date('2026-06-01T00:00:00.000Z'),
+    ends_at: new Date('2026-09-01T00:00:00.000Z'),
     active: true,
   }));
 }

@@ -110,11 +110,12 @@ const PRODUCTS = [
 ];
 
 // A wide, currently-open window so the date-window check passes in tests without a fixed clock.
+// starts_at/ends_at are BSON Dates (matching how the app now stores promotions).
 const PROMOTIONS = [
-  { _id: 'promo_0001', code: 'SAVE5', discount_pct: 5, applies_to_category: 'kitchen', product_ids: [], starts_at: '2000-01-01T00:00:00.000Z', ends_at: '2999-01-01T00:00:00.000Z', active: true },
-  { _id: 'promo_0002', code: 'EXPIRED', discount_pct: 10, applies_to_category: 'kitchen', product_ids: [], starts_at: '2000-01-01T00:00:00.000Z', ends_at: '2001-01-01T00:00:00.000Z', active: true },
-  { _id: 'promo_0003', code: 'INACTIVE', discount_pct: 10, applies_to_category: 'kitchen', product_ids: [], starts_at: '2000-01-01T00:00:00.000Z', ends_at: '2999-01-01T00:00:00.000Z', active: false },
-  { _id: 'promo_0004', code: 'SAVE10APP', discount_pct: 10, applies_to_category: 'apparel', product_ids: [], starts_at: '2000-01-01T00:00:00.000Z', ends_at: '2999-01-01T00:00:00.000Z', active: true },
+  { _id: 'promo_0001', code: 'SAVE5', discount_pct: 5, applies_to_category: 'kitchen', product_ids: [], starts_at: new Date('2000-01-01T00:00:00.000Z'), ends_at: new Date('2999-01-01T00:00:00.000Z'), active: true },
+  { _id: 'promo_0002', code: 'EXPIRED', discount_pct: 10, applies_to_category: 'kitchen', product_ids: [], starts_at: new Date('2000-01-01T00:00:00.000Z'), ends_at: new Date('2001-01-01T00:00:00.000Z'), active: true },
+  { _id: 'promo_0003', code: 'INACTIVE', discount_pct: 10, applies_to_category: 'kitchen', product_ids: [], starts_at: new Date('2000-01-01T00:00:00.000Z'), ends_at: new Date('2999-01-01T00:00:00.000Z'), active: false },
+  { _id: 'promo_0004', code: 'SAVE10APP', discount_pct: 10, applies_to_category: 'apparel', product_ids: [], starts_at: new Date('2000-01-01T00:00:00.000Z'), ends_at: new Date('2999-01-01T00:00:00.000Z'), active: true },
 ];
 
 describe('buildCartTools identity binding', () => {
@@ -215,6 +216,14 @@ describe('buildCartTools identity binding', () => {
     const res: any = await cartRead.execute!({} as any, {} as any);
     expect(res.subtotal).toBe(16);
     expect(res.total_savings).toBe(4);
+  });
+
+  it('stamps updated_at as a BSON Date (not an ISO string) on add', async () => {
+    const { db, calls } = stubDb();
+    const { cartAdd } = buildCartTools({ db, ...key });
+    await cartAdd.execute!({ line: { product_id: 'prod_0021', qty: 1 } } as any, {} as any);
+    const setUpdate = calls.find(c => c.op === 'updateOne')!.update.$set;
+    expect(setUpdate.updated_at).toBeInstanceOf(Date);
   });
 
   it('fires onMutate for add/remove', async () => {
@@ -344,8 +353,8 @@ describe('applyCoupon', () => {
     const { db, setDoc } = stubDb([
       { _id: 'prod_0021', name: 'Classic Insulated Water Bottle 8in', category: 'kitchen', price_usd: 145.99, sale_price_usd: 116.79, on_sale: true, stock: 5 },
     ], [
-      { _id: 'promo_0001', code: 'SAVE5', discount_pct: 5, applies_to_category: 'kitchen', product_ids: [], starts_at: '2000-01-01T00:00:00.000Z', ends_at: '2999-01-01T00:00:00.000Z', active: true },
-      { _id: 'promo_0005', code: 'SAVE20KIT', discount_pct: 20, applies_to_category: 'kitchen', product_ids: [], starts_at: '2000-01-01T00:00:00.000Z', ends_at: '2999-01-01T00:00:00.000Z', active: true },
+      { _id: 'promo_0001', code: 'SAVE5', discount_pct: 5, applies_to_category: 'kitchen', product_ids: [], starts_at: new Date('2000-01-01T00:00:00.000Z'), ends_at: new Date('2999-01-01T00:00:00.000Z'), active: true },
+      { _id: 'promo_0005', code: 'SAVE20KIT', discount_pct: 20, applies_to_category: 'kitchen', product_ids: [], starts_at: new Date('2000-01-01T00:00:00.000Z'), ends_at: new Date('2999-01-01T00:00:00.000Z'), active: true },
     ]);
     setDoc(kitchenCart({ applied_coupons: ['SAVE5'], coupon_savings: 5.84 }));
     const { applyCoupon } = buildCartTools({ db, ...key });

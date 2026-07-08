@@ -214,6 +214,10 @@ describe('place-order workflow steps', () => {
     // Effective (sale) unit price is stored so items reconcile with total_usd.
     expect(store.orders[0].items[0].unit_price_usd).toBe(8);
     expect(store.orders[0].items[0].list_price_usd).toBe(10);
+    // placed_at is persisted as a BSON Date built from the string `now` carried through the
+    // (JSON-serialized) workflow snapshot — not stored as a raw ISO string.
+    expect(store.orders[0].placed_at).toBeInstanceOf(Date);
+    expect((store.orders[0].placed_at as Date).toISOString()).toBe(INIT.now);
     expect(store.products[0].stock).toBe(48); // 50 - qty(2)
     expect(store.carts).toHaveLength(0);      // cart cleared
   });

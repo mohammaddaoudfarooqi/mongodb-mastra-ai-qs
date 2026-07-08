@@ -32,9 +32,10 @@ export function unwrapSuspendPayload(result: { suspended?: any; suspendPayload?:
  * thread — no in-memory state — so it works across process restarts / replicas.
  *
  * The orderId is a fresh ObjectId (collision-free even under Docker PID 1 with a
- * reset counter); the timestamp uses the same `new Date().toISOString()`
- * convention the cart tool already uses at the HTTP boundary. Both are generated
- * here, not in the workflow steps, keeping the steps deterministic + unit-testable.
+ * reset counter); the timestamp is an ISO string here because it must ride through
+ * the JSON-serialized workflow snapshot across suspend→resume — the place-order step
+ * converts it to a BSON Date at the `orders` insert boundary. Both are generated here,
+ * not in the workflow steps, keeping the steps deterministic + unit-testable.
  */
 export function buildOrderRunner(cfg: Config, rc: RouteContext): OrderRunner {
   // A dedicated storage-bound Mastra whose only job is to own the workflow with a

@@ -19,7 +19,7 @@ export interface CartDoc {
   userId: string;
   threadId: string;
   lines: CartLine[];
-  updated_at: string | null;
+  updated_at: Date | null;
 }
 
 /** The `products` fields the cart resolver reads (a partial view of the full catalog doc). */
@@ -38,8 +38,8 @@ interface PromotionDoc {
   discount_pct: number;
   applies_to_category: string;
   product_ids: string[];
-  starts_at: string;
-  ends_at: string;
+  starts_at: Date;
+  ends_at: Date;
   active: boolean;
 }
 
@@ -228,7 +228,7 @@ export function buildCartTools(args: {
         addedThisTurn.add(line.product_id);
         await carts.updateOne(
           { ...key, 'lines.product_id': line.product_id },
-          { $inc: { 'lines.$.qty': line.qty }, $set: { updated_at: new Date().toISOString() } },
+          { $inc: { 'lines.$.qty': line.qty }, $set: { updated_at: new Date() } },
         );
         return { ok: true, line: { ...already, qty: already.qty + line.qty } };
       }
@@ -248,7 +248,7 @@ export function buildCartTools(args: {
       addedThisTurn.add(line.product_id);
       await carts.updateOne(
         key,
-        { $push: { lines: line }, $set: { updated_at: new Date().toISOString() } },
+        { $push: { lines: line }, $set: { updated_at: new Date() } },
         { upsert: true },
       );
       return { ok: true, line };
@@ -262,7 +262,7 @@ export function buildCartTools(args: {
       args.onMutate?.();
       await carts.updateOne(
         key,
-        { $pull: { lines: { product_id: inputData.product_id } }, $set: { updated_at: new Date().toISOString() } },
+        { $pull: { lines: { product_id: inputData.product_id } }, $set: { updated_at: new Date() } },
       );
       return { ok: true };
     },
@@ -292,10 +292,12 @@ export function buildCartTools(args: {
       if (!promo || promo.active !== true) {
         return { ok: false, reason: `"${code}" is not a valid, active coupon code.` };
       }
-      // Date window: the code must be currently in effect.
+      // Date window: the code must be currently in effect. starts_at/ends_at are BSON
+      // Dates; getTime() is NaN-safe via Number.isFinite so a malformed/missing date is
+      // simply not enforced (never a false "outside dates" rejection).
       const now = Date.now();
-      const startsAt = Date.parse(promo.starts_at);
-      const endsAt = Date.parse(promo.ends_at);
+      const startsAt = promo.starts_at instanceof Date ? promo.starts_at.getTime() : NaN;
+      const endsAt = promo.ends_at instanceof Date ? promo.ends_at.getTime() : NaN;
       if ((Number.isFinite(startsAt) && now < startsAt) || (Number.isFinite(endsAt) && now > endsAt)) {
         return { ok: false, reason: `Coupon "${promo.code}" is not active right now (outside its valid dates).` };
       }
@@ -327,7 +329,7 @@ export function buildCartTools(args: {
       }
 
       args.onMutate?.();
-      await carts.updateOne(key, { $set: { lines: next, updated_at: new Date().toISOString() } });
+      await carts.updateOne(key, { $set: { lines: next, updated_at: new Date() } });
       const totals = computeCartTotals(next);
       return {
         ok: true,

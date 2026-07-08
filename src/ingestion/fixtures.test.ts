@@ -54,6 +54,8 @@ describe('generateOrders', () => {
       expect(o.items.length).toBeGreaterThan(0);
       for (const it of o.items) expect(ids.has(it.product_id)).toBe(true);
       expect(o.total_usd).toBeGreaterThan(0);
+      // placed_at is a BSON Date, not an ISO string (see the datetime-type fix).
+      expect(o.placed_at).toBeInstanceOf(Date);
     }
   });
 });
@@ -66,6 +68,9 @@ describe('generatePromotions', () => {
       expect(p.discount_pct).toBeGreaterThan(0);
       expect(p.discount_pct).toBeLessThanOrEqual(100);
       expect(CATEGORIES).toContain(p.applies_to_category);
+      // starts_at/ends_at are BSON Dates, not ISO strings (see the datetime-type fix).
+      expect(p.starts_at).toBeInstanceOf(Date);
+      expect(p.ends_at).toBeInstanceOf(Date);
     }
   });
 });

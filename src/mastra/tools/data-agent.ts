@@ -3,7 +3,52 @@ import { logger } from '../../observability/logger';
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
 import type { Db } from 'mongodb';
-import { SCHEMAS } from '../schemas';
+import { SCHEMAS, dateFieldsFor } from '../schemas';
+
+const LOGICAL_OPS = new Set(['$and', '$or', '$not']);
+// Comparison operators whose operands are date VALUES (not sub-filters) for a date field.
+const VALUE_OPS = new Set(['$eq', '$ne', '$gt', '$gte', '$lt', '$lte', '$in', '$nin']);
+
+/** Coerce one date value (or operator object / array) from an ISO string to a Date.
+ *  Unparseable strings and non-string values are left untouched, so a malformed date can
+ *  never crash the query — it simply won't match a Date-typed column (safe degradation). */
+function coerceDateValue(value: unknown): unknown {
+  if (typeof value === 'string') {
+    const ms = Date.parse(value);
+    return Number.isNaN(ms) ? value : new Date(ms);
+  }
+  if (Array.isArray(value)) return value.map(coerceDateValue);
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = VALUE_OPS.has(k) ? coerceDateValue(v) : v;
+    }
+    return out;
+  }
+  return value;
+}
+
+/** Recursively coerce ISO-string date values under declared date fields to BSON Dates,
+ *  so the model can express dates as ISO-8601 strings while the columns are stored as
+ *  Date. Mirrors the recursive shape of mql-guard's `walk`; only touches declared date
+ *  fields and $and/$or/$not sub-clauses, leaving every other value exactly as given. */
+function coerceDateFilter(filter: Record<string, unknown>, dateFields: string[]): Record<string, unknown> {
+  if (!dateFields.length) return filter;
+  const dates = new Set(dateFields);
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(filter)) {
+    if (LOGICAL_OPS.has(key)) {
+      out[key] = Array.isArray(value)
+        ? value.map(v => (v && typeof v === 'object' ? coerceDateFilter(v as Record<string, unknown>, dateFields) : v))
+        : (value && typeof value === 'object' ? coerceDateFilter(value as Record<string, unknown>, dateFields) : value);
+    } else if (dates.has(key)) {
+      out[key] = coerceDateValue(value);
+    } else {
+      out[key] = value;
+    }
+  }
+  return out;
+}
 
 export interface RunFindResult { ok: boolean; rows?: unknown[]; reason?: string; }
 
@@ -31,7 +76,10 @@ export async function runValidatedFind(
     reason: verdict.reason,
   });
   if (!verdict.ok) return { ok: false, reason: verdict.reason };
-  const rows = await deps.find(input.collection, input.filter, deps.limit);
+  // The columns are BSON Dates but the model expresses dates as ISO-8601 strings; coerce
+  // string values under declared date fields to Date so range/equality filters match.
+  const filter = coerceDateFilter(input.filter, dateFieldsFor(input.collection));
+  const rows = await deps.find(input.collection, filter, deps.limit);
   return { ok: true, rows };
 }
 
