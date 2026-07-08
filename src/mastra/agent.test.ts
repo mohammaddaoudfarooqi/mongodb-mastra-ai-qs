@@ -72,3 +72,36 @@ describe('buildConcierge', () => {
     expect(resolved.semanticRecall).toMatchObject({ scope: 'resource' });
   });
 });
+
+describe('isBulkAddIntent', () => {
+  it('matches explicit bulk/all-item add phrasings', async () => {
+    const { isBulkAddIntent } = await import('./agent');
+    for (const m of [
+      'add all',
+      'add all the discounted items',
+      'add everything on sale',
+      'add them all',
+      'add one each',
+      'put these in my cart',
+      'add every item',
+      'add all of them',
+    ]) {
+      expect(isBulkAddIntent(m)).toBe(true);
+    }
+  });
+
+  it('does NOT match single-item adds (anti-ballooning guard stays at 1)', async () => {
+    const { isBulkAddIntent } = await import('./agent');
+    for (const m of [
+      'add the mug',
+      'add a kitchen item',
+      'add the biggest-savings sports product',
+      'what is on discount?',
+      'add it to my cart',
+      undefined,
+      '',
+    ]) {
+      expect(isBulkAddIntent(m as any)).toBe(false);
+    }
+  });
+});

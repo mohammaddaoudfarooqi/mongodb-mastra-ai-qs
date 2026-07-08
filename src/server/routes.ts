@@ -2,7 +2,8 @@ import type { Context } from 'hono';
 import { stream } from 'hono/streaming';
 import { MongoClient, type Db } from 'mongodb';
 import type { Config } from '../config';
-import { logger } from '../observability/logger';
+import { logger, setLogSink } from '../observability/logger';
+import { createMongoLogSink } from '../observability/mongo-log-sink';
 import { toCartsmithFrames, serializeFrame, field, type StreamPart } from './sse';
 import { projectMessage } from './projection';
 import { buildConcierge, buildConciergeDeps, type TurnContext, type ConciergeDeps } from '../mastra/agent';
@@ -77,6 +78,18 @@ export function buildRouteContext(cfg: Config): RouteContext {
     minPoolSize: cfg.mongoPool.minPoolSize,
   });
   const db = client.db(cfg.mongoDb);
+
+  // Attach the MongoDB log sink so app logs are persisted (in addition to stdout/stderr).
+  // Connection-free at construction: the sink only buffers until its first timed flush, and
+  // the shared MongoClient connects lazily — so building a RouteContext still does no I/O.
+  // Idempotent-ish: the last RouteContext built wins as the active sink (there is one per
+  // process in practice). Fail-open inside the sink; never throws here.
+  if (cfg.appLog?.enabled) {
+    setLogSink(createMongoLogSink({
+      db, collection: cfg.appLog.collection, retentionDays: cfg.appLog.retentionDays,
+    }));
+  }
+
   const cacheCol = db.collection('semantic_response_cache');
   const queryEmbedder = getQueryEmbedder(cfg);
   const cache = new SemanticResponseCache({
@@ -128,7 +141,7 @@ export const handlers = {
     const threadId = body.thread_id || `${userId}:default`;
     const model = body.model || cfg.llmModel;
     const correlationId = rc.nextCorrelationId();
-    const turn: TurnContext = { signals: freshSignals(), modelOverride: body.model, userId, threadId };
+    const turn: TurnContext = { signals: freshSignals(), modelOverride: body.model, userId, threadId, message };
     const deps = rc.getSharedDeps();
     const { agent, memory } = (rc.buildAgent ?? buildConcierge)(cfg, turn, deps);
 

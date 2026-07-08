@@ -19,10 +19,34 @@ export interface TurnContext {
   modelOverride?: string;
   userId?: string;
   threadId?: string;
+  /** The shopper's message this turn. Used to detect explicit bulk-add intent
+   *  ("add all", "one each") so the cart's per-turn distinct-add cap is raised
+   *  only for turns that actually asked for several items (see isBulkAddIntent). */
+  message?: string;
   /** Set by the `checkout` tool when the shopper asks to buy; the /chat bridge
    *  reads it after the agent turn to start the order workflow (REQ-E-030). */
   checkoutRequested?: boolean;
 }
+
+/**
+ * True when the shopper's message explicitly asks to add SEVERAL / ALL items in one turn
+ * ("add all", "add everything", "one each", "every item", "add these"). The cart's
+ * distinct-add cap defaults to 1 (anti-ballooning: a single-item request must not add
+ * extras — see cart.ts maxDistinctAddsPerTurn). Only an explicit bulk request lifts that
+ * cap, so a normal "add the mug" turn is still capped at one distinct product. Kept as a
+ * narrow allow-list of phrasings rather than any plural, so "add a kitchen item" (still one
+ * item) does not trip it.
+ */
+const BULK_ADD_RE =
+  /\b(add|put)\b[^.?!]*\b(all|everything|them all|each|these|those|every (item|one|product|thing))\b|\bone each\b|\ball (of )?(them|the [a-z]+)\b/i;
+export function isBulkAddIntent(message?: string): boolean {
+  return typeof message === 'string' && BULK_ADD_RE.test(message);
+}
+
+/** Cap on distinct products a single bulk-intent turn may add. Sized to the demo's on-sale
+ *  set (~24 items) so "add all the discounted items" completes in one turn; grounding
+ *  (turnProductIds) + idempotent re-add still contain runaway adds. */
+const BULK_ADD_CAP = 25;
 
 const SHOPPER_PROFILE_TEMPLATE = `# Shopper Profile
 - Preferences:
@@ -75,7 +99,15 @@ the highest price_usd − sale_price_usd; ties broken by lowest _id so the choic
 ONCE with that product's _id, then briefly say what you added, the savings, and that they can swap it for
 another. Add exactly ONE line unless the shopper explicitly asked for several — do not add extras. Only
 ask a clarifying question if no product matches all constraints at all.
-Use cartRead to summarize the cart and its total savings.
+When the shopper asks to add SEVERAL or ALL items (e.g. "add all", "one each"): dataQuery the full set
+ONCE, then call cartAdd once per product using each product's real _id. Add every item they asked for —
+do not stop after one.
+TRUTHFULNESS — never fabricate cart state. cartAdd returns { ok: true, line } or { ok: false, reason }.
+NEVER say an item was added, and NEVER state a line count, subtotal, savings, or running total, unless
+cartAdd returned ok:true for it. If cartAdd returns ok:false, do exactly what its reason says and tell the
+shopper that item was NOT added. Do NOT invent progress ("added 16 items… $750") or accumulate totals in
+your head. To report what is in the cart or any total, call cartRead and use its exact numbers — it is the
+only source of truth for cart contents and totals.
 You do NOT handle checkout: never claim an order was placed or completed. If the shopper wants to
 buy or check out, the concierge owns that flow — just summarize the cart if asked.
 Be concise.`;
@@ -159,6 +191,9 @@ export function buildConcierge(cfg: Config, turn: TurnContext, deps?: ConciergeD
     threadId: turn.threadId ?? `${turn.userId ?? cfg.defaultUserId}:default`,
     onMutate: () => { turn.signals.mutatingToolRan = true; },
     turnProductIds,
+    // Raise the distinct-add cap only when the shopper explicitly asked for several/all
+    // items this turn; otherwise stay at the default 1 (anti-ballooning guard).
+    maxDistinctAddsPerTurn: isBulkAddIntent(turn.message) ? BULK_ADD_CAP : 1,
   });
   const checkout = buildCheckoutTool({ onCheckout: () => { turn.checkoutRequested = true; } });
 
