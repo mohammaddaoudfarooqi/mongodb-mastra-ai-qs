@@ -6,6 +6,7 @@ const cfg = {
   mongoUri: 'mongodb+srv://u:p@c.mongodb.net/', mongoDb: 'db', voyageApiKey: 'vk',
   llmProvider: 'anthropic', llmModel: 'claude-opus-4-8', allowInsecure: false,
   responseCache: { enabled: false, ttlDays: 1, similarityThreshold: 0.9, maxAnswerBytes: 32768 },
+  memory: { semanticRecall: false, lastMessages: 10 },
   rrfK: 60, dataAgentAllowList: ['products'], dataAgentLimit: 25,
   emitPlanFrames: false, ingestDescribe: true, port: 8000, defaultUserId: 'demo',
   mongoPool: { maxPoolSize: 100, minPoolSize: 10 },

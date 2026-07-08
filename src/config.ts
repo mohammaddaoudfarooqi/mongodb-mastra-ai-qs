@@ -6,6 +6,13 @@ export interface Config {
   memoryEmbedModel?: string;
   allowInsecure: boolean;
   responseCache: { enabled: boolean; ttlDays: number; similarityThreshold: number; maxAnswerBytes: number };
+  // Memory recall tuning. `semanticRecall` toggles the per-turn cross-thread vector
+  // search Mastra runs on EVERY agent.stream() call — an embed + Atlas $vectorSearch
+  // over the user's whole history that adds ~10s to a trivial turn. Off by default:
+  // cross-thread personalization is carried by working memory (the shopper profile),
+  // not by recall, so disabling it keeps that demo working while cutting the tax.
+  // `lastMessages` is a cheap storage-only window of recent in-thread turns (no embed).
+  memory: { semanticRecall: boolean; lastMessages: number };
   rrfK: number;
   dataAgentAllowList: string[]; dataAgentLimit: number;
   emitPlanFrames: boolean; ingestDescribe: boolean; ingestAssetsDir?: string; ingestPdfScale: number;
@@ -60,6 +67,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       ttlDays: num(env.RESPONSE_CACHE_TTL_DAYS, 1),
       similarityThreshold: num(env.RESPONSE_CACHE_SIMILARITY_THRESHOLD, 0.92),
       maxAnswerBytes: num(env.RESPONSE_CACHE_MAX_ANSWER_BYTES, 32768),
+    },
+    memory: {
+      semanticRecall: bool(env.MEMORY_SEMANTIC_RECALL, false),
+      lastMessages: num(env.MEMORY_LAST_MESSAGES, 10),
     },
     rrfK: num(env.RRF_K, 60),
     dataAgentAllowList: (env.DATA_AGENT_ALLOW_LIST ?? 'products,orders,promotions')

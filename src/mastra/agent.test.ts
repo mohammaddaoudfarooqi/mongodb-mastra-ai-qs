@@ -5,6 +5,7 @@ const cfg = {
   mongoUri: 'mongodb+srv://u:p@c.mongodb.net/', mongoDb: 'db', voyageApiKey: 'vk',
   llmProvider: 'anthropic', llmModel: 'claude-opus-4-8', allowInsecure: false,
   responseCache: { enabled: true, ttlDays: 1, similarityThreshold: 0.9, maxAnswerBytes: 32768 },
+  memory: { semanticRecall: false, lastMessages: 10 },
   rrfK: 60, dataAgentAllowList: ['products', 'orders', 'promotions'], dataAgentLimit: 25,
   emitPlanFrames: false, ingestDescribe: true, port: 8000, defaultUserId: 'demo',
   mongoPool: { maxPoolSize: 100, minPoolSize: 10 },
@@ -51,11 +52,23 @@ describe('buildConcierge', () => {
     expect(Object.keys(tools)).not.toContain('checkout');
   });
 
-  it('configures resource-scoped recall and working memory on the router memory', async () => {
+  it('defaults semanticRecall OFF (the per-turn vector search) but keeps resource working memory', async () => {
+    // The per-turn cross-thread vector search is the biggest latency tax (adds ~10s to
+    // even "hi"), and cross-thread personalization rides on working memory, not recall —
+    // so the default config disables recall while keeping the resource-scoped shopper
+    // profile. lastMessages gives cheap in-thread coherence (storage read, no embed).
     const { buildConcierge } = await import('./agent');
     const { memory } = buildConcierge(cfg, turn());
     const resolved = (memory as any).getMergedThreadConfig();
-    expect(resolved.semanticRecall).toMatchObject({ scope: 'resource' });
+    expect(resolved.semanticRecall).toBe(false);
+    expect(resolved.lastMessages).toBe(10);
     expect(resolved.workingMemory).toMatchObject({ enabled: true, scope: 'resource' });
+  });
+
+  it('enables resource-scoped recall when cfg.memory.semanticRecall is on', async () => {
+    const { buildConcierge } = await import('./agent');
+    const { memory } = buildConcierge({ ...cfg, memory: { semanticRecall: true, lastMessages: 10 } }, turn());
+    const resolved = (memory as any).getMergedThreadConfig();
+    expect(resolved.semanticRecall).toMatchObject({ scope: 'resource' });
   });
 });

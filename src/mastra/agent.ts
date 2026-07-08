@@ -102,12 +102,27 @@ export function buildConciergeDeps(cfg: Config): ConciergeDeps {
   });
   const db = client.db(cfg.mongoDb);
 
+  // Memory recall strategy (this is the single biggest per-turn latency lever):
+  //  - semanticRecall runs an embed + Atlas $vectorSearch over the user's whole
+  //    history on EVERY agent.stream() call — even "hi". It added ~10s to a trivial
+  //    turn. The reference LangChain app avoids this by making recall an explicit
+  //    TOOL the model calls only when relevant. We default it OFF (cfg.memory.
+  //    semanticRecall) and rely on working memory for cross-thread personalization.
+  //  - workingMemory (the resource-scoped shopper profile) is ALWAYS on: it is a
+  //    small doc injected into the system prompt, not a per-turn vector query, and it
+  //    is what actually powers the cross-thread "remember my preference" demo (A2).
+  //  - lastMessages gives cheap in-thread coherence: a storage read of the recent
+  //    turns in THIS thread, no embedding, so a follow-up still has conversational
+  //    context without paying for a vector search.
   const memory = new Memory({
     storage: new MongoDBStore({ id: 'concierge-store', uri: cfg.mongoUri, dbName: cfg.mongoDb }),
     vector,
     embedder: getMemoryEmbedder(cfg) as any,
     options: {
-      semanticRecall: { topK: 5, messageRange: 2, scope: 'resource' },
+      lastMessages: cfg.memory.lastMessages,
+      semanticRecall: cfg.memory.semanticRecall
+        ? { topK: 5, messageRange: 2, scope: 'resource' }
+        : false,
       workingMemory: { enabled: true, scope: 'resource', template: SHOPPER_PROFILE_TEMPLATE },
     },
   });
