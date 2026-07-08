@@ -6,7 +6,7 @@ import React, {
 } from 'react';
 import { useChat } from '../context/ChatContext';
 import ChatMessage from './ChatMessage';
-import { MastraMark } from './brand';
+import { MongoLeaf, MastraMark } from './brand';
 import type { CartResponse, InterruptEvent, Todo } from '../api/client';
 
 /* ── small helpers ─────────────────────────────────────────────────────── */
@@ -468,8 +468,14 @@ function Panel() {
             color: 'var(--spring-green)',
           }}
         >
-          {/* Mastra mark signals "this agent runs on Mastra" at the point of
-              interaction; the label keeps the MongoDB half of the co-brand. */}
+          {/* Co-brand lockup, same as the app header: MongoDB leaf + hairline
+              divider + Mastra mark, so the chat panel reads as an equal
+              MongoDB × Mastra partnership at the point of interaction. */}
+          <MongoLeaf size={16} />
+          <span
+            aria-hidden="true"
+            style={{ width: 1, height: 13, background: 'var(--border-strong)' }}
+          />
           <MastraMark size={13} fill="var(--mastra-mark)" />
           MongoDB + Mastra Cart Concierge
         </div>

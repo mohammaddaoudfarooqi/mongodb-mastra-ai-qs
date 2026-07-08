@@ -29,6 +29,38 @@ interface Props {
 }
 
 /**
+ * Animated "thinking" indicator shown in an assistant bubble before the first
+ * token arrives. A cold model call (router → sub-agent → hybrid search) can take
+ * tens of seconds; a static "…" reads as a hung UI. Three staggered pulsing dots
+ * make the wait feel alive from the instant the turn starts. Honours
+ * prefers-reduced-motion via the shared rule in global.css.
+ */
+function ThinkingDots() {
+  return (
+    <span
+      aria-label="Assistant is thinking"
+      role="status"
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '2px 0' }}
+    >
+      {[0, 1, 2].map((i) => (
+        <span
+          key={i}
+          aria-hidden="true"
+          style={{
+            width: 6,
+            height: 6,
+            borderRadius: '50%',
+            background: 'var(--spring-green)',
+            animation: 'pulse-dot 1.1s ease-in-out infinite',
+            animationDelay: `${i * 0.18}s`,
+          }}
+        />
+      ))}
+    </span>
+  );
+}
+
+/**
  * Guard against an UNCLOSED ``` code fence in the assistant's text. The agent
  * sometimes echoes a query in a fence and forgets to close it (e.g.
  * "``` db.products.aggregate(...)"), which makes react-markdown render the
@@ -185,6 +217,10 @@ const ChatMessage: React.FC<Props> = React.memo(({ message }) => {
       <div style={bubbleStyle}>
         {isUser ? (
           <div>{message.content}</div>
+        ) : !isError && !message.content ? (
+          // No tokens yet — show the animated thinking indicator instead of a
+          // static "…", so a cold turn never looks hung.
+          <ThinkingDots />
         ) : (
           <div className="chat-markdown">
             <ReactMarkdown
