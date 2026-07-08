@@ -65,6 +65,25 @@ clone_and_up() {
   # publishes 8000 for admin-only direct access. --profile studio also starts Mastra
   # Studio (the dev/observability UI) on :4111, enabled by default for the demo.
   docker compose -f docker-compose.yml -f deploy/compose.nginx.yml --profile studio up -d --build
+
+  # Studio auto-connect: `mastra dev` serves .mastra/output/studio/index.html and
+  # templates it per-request with serverHost=localhost, so a remote browser prompts
+  # for the Mastra instance URL. Bake concrete values into the served file so the
+  # per-request templater has nothing left to override: set MASTRA_AUTO_DETECT_URL to
+  # 'true' (the client then uses window.location.origin — whatever host/port the
+  # browser loaded Studio from) and the host to the instance's public DNS as a
+  # fallback. Wait for the file to exist (dev server bundles it a few s after boot).
+  local dns idx="/app/.mastra/output/studio/index.html"
+  dns=$(curl -fsS http://169.254.169.254/latest/meta-data/public-hostname 2>/dev/null || echo "")
+  local i
+  for i in $(seq 1 30); do
+    if docker compose --profile studio exec -T studio sh -c "[ -f $idx ]" 2>/dev/null; then
+      docker compose --profile studio exec -T studio sh -c \
+        "sed -i \"s/%%MASTRA_AUTO_DETECT_URL%%/true/g; s/%%MASTRA_SERVER_HOST%%/$dns/g\" $idx" \
+        && log "studio auto-detect URL enabled (host=$dns)" && break
+    fi
+    sleep 5
+  done
 }
 
 main() {
