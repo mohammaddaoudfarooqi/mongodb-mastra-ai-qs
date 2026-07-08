@@ -6,28 +6,34 @@ export interface Preset {
   text: string;
 }
 
+// Ordered as a retail-recipe shopping story: discover the sale → pick a recipe → check
+// prices/stock → build the cart → optimize savings → learn the loyalty perks → check out.
+// Every prompt maps to a capability the deployed app actually has (multimodal retrieval,
+// hybrid+rerank knowledge over the recipe/loyalty/coupon/shipping docs, the NL→MQL data
+// agent over products/orders/promotions, cross-thread working memory, the cart tools, and
+// the HITL checkout workflow) — so a live demo never hits an unsupported feature.
 export const PRESETS: Preset[] = [
   // Beat 1: Multimodal retrieval (HERO) — DEALS. Hits the ingested pamphlet/image assets.
   {
-    icon: '🖼️',
-    text: 'Show me the summer sale pamphlet and tell me what it is promoting.',
+    icon: '🏷️',
+    text: 'Show me this week\'s sale pamphlet and tell me what\'s discounted.',
   },
   // Beat 2: Hybrid + rerank — RECIPES. Knowledge base retrieval fused and reranked.
   {
     icon: '🍝',
-    text: 'Share a quick pasta recipe I can make tonight.',
+    text: 'I want to make pasta for dinner tonight. Share a quick recipe and its ingredients.',
   },
-  // Beat 3: Hybrid + rerank — LOYALTY. Surfaces the loyalty-program knowledge doc.
+  // Beat 3: NL→MQL data agent — live prices + stock for the recipe ingredients.
   {
-    icon: '⭐',
-    text: 'How does your loyalty program work, and how do points convert to rewards?',
+    icon: '🍗',
+    text: 'Find a quick weeknight chicken recipe, then check which ingredients are in stock and their prices.',
   },
-  // Beat 4a: Memory. Store a preference.
+  // Beat 4a: Memory. Store a durable preference (cross-thread working memory).
   {
     icon: '🧠',
-    text: 'Remember that I prefer eco-friendly kitchen products.',
+    text: 'Remember that I prefer eco-friendly kitchen products and cook for a family of four.',
   },
-  // Beat 4b: Memory. Recall it in a later turn.
+  // Beat 4b: Memory. Recall it and personalize in a later turn.
   {
     icon: '💡',
     text: 'Based on what you know about me, what kitchen items would you recommend?',
@@ -37,15 +43,30 @@ export const PRESETS: Preset[] = [
     icon: '🛒',
     text: 'Add the on-sale kitchen product with the biggest savings to my cart and show my total savings.',
   },
-  // Beat 6: Semantic cache. Repeat a common question to demonstrate the instant cache hit.
+  // Beat 6: Bulk cart-add (intent-gated multi-add) + honest cart totals from cartRead.
+  {
+    icon: '🧺',
+    text: 'Add one of every discounted item to my cart, then tell me the real cart total.',
+  },
+  // Beat 7: Hybrid + rerank — COUPONS. Surfaces the coupon-terms knowledge doc.
+  {
+    icon: '💸',
+    text: 'What are the coupon-stacking rules, and which discounts can I combine?',
+  },
+  // Beat 8: Hybrid + rerank — LOYALTY. Surfaces the loyalty-program knowledge doc.
+  {
+    icon: '⭐',
+    text: 'What are the Gold tier loyalty benefits, and how do points convert to dollars?',
+  },
+  // Beat 9: Semantic cache. A common question that demonstrates the instant cache hit.
   {
     icon: '⚡',
     text: 'How long does shipping take?',
   },
-  // Beat 7: NL to MQL data agent — DEALS. Safe natural-language query over live retail data.
+  // Beat 10: HITL checkout. Starts the approval workflow (pauses for explicit approval).
   {
-    icon: '🗄️',
-    text: 'Show me a few products that are on sale, with their sale prices.',
+    icon: '✅',
+    text: 'Check out and place my order.',
   },
 ];
 
@@ -157,8 +178,8 @@ export default function PresetGrid() {
       <div style={headingStyle}>Try a demo prompt</div>
       <div style={subheadStyle}>What can your assistant do?</div>
       <div style={gridStyle}>
-        {PRESETS.map((p) => (
-          <PresetCard key={p.icon} preset={p} onAsk={() => ask(p.text)} />
+        {PRESETS.map((p, i) => (
+          <PresetCard key={`${i}-${p.icon}`} preset={p} onAsk={() => ask(p.text)} />
         ))}
       </div>
     </section>
