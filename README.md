@@ -59,9 +59,6 @@ Docker behind nginx, a co-located **Atlas M10** reached over **AWS↔Atlas VPC p
 drop from ~250 ms to ~1–5 ms), the LLM on **AWS Bedrock** via the instance role (no API key on the
 box), and app secrets delivered through **SSM Parameter Store**.
 
-Before you start, enable **Bedrock model access** for the Claude models you expose (both Sonnet 4.5
-and Haiku 4.5) in your target region — approval can take hours, so do it first.
-
 ```bash
 cp deploy/terraform/terraform.tfvars.example deploy/terraform/terraform.tfvars
 # edit terraform.tfvars: aws_region, cluster names, bedrock_model_id, etc. (non-secret)
