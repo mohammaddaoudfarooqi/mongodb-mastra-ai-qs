@@ -134,8 +134,10 @@ export async function runIngest(cfg: Config, describe?: DescribeFn): Promise<{ u
   const assetsDir = cfg.ingestAssetsDir ?? join(HERE, 'assets');
   let describer = describe;
   if (!describer) {
-    const { createAnthropicDescriber } = await import('./describe');
-    describer = createAnthropicDescriber(cfg);
+    // Provider-aware: Bedrock deploys (EC2 instance role) use the Converse path; the direct
+    // Anthropic REST describer only knows api-key/x-api-key auth and 401s on Bedrock.
+    const { createDescriber } = await import('./describe');
+    describer = createDescriber(cfg);
   }
   try {
     await client.connect();

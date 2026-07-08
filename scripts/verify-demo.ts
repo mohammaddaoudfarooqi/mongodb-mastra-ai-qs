@@ -137,6 +137,30 @@ async function main() {
     record('cart (single on-sale add)', !bad, bad || `added ${lines[0]?.product_id}, subtotal ${cart.subtotal}`);
   }
 
+  // Coupon beat: on a fresh thread, add an on-sale kitchen item then apply SAVE5 (5% off
+  // kitchen). Verify the coupon actually lowered the total — guards the bug where the agent
+  // promised "applied at checkout" but nothing discounted the order. Own thread so it does
+  // not disturb the checkout beat's cart.
+  {
+    const couponTid = `${uid}:coupon:${Date.now()}`;
+    await chat({ user_id: uid, thread_id: couponTid, message: 'Add an on-sale kitchen item to my cart.' });
+    await chat({ user_id: uid, thread_id: couponTid, message: 'Apply coupon SAVE5 to my cart.' });
+    const cartRes = await fetch(`${API}/cart?user_id=${encodeURIComponent(uid)}&thread_id=${encodeURIComponent(couponTid)}`);
+    const cart = await cartRes.json() as {
+      lines: { applied_coupons?: string[] }[]; subtotal: number; coupon_savings?: number; total?: number;
+    };
+    const lines = cart.lines ?? [];
+    const couponSavings = cart.coupon_savings ?? 0;
+    const total = cart.total ?? cart.subtotal;
+    const codeStamped = lines.some(l => (l.applied_coupons ?? []).includes('SAVE5'));
+    const bad = lines.length === 0 ? 'nothing added (cannot test coupon)'
+      : couponSavings <= 0 ? 'coupon_savings is 0 (SAVE5 not applied)'
+      : !(total < cart.subtotal) ? `total ${total} not below subtotal ${cart.subtotal}`
+      : !codeStamped ? 'SAVE5 not stamped on any line'
+      : '';
+    record('coupon (apply SAVE5)', !bad, bad || `saved ${couponSavings.toFixed(2)}, total ${total.toFixed(2)}`);
+  }
+
   // Checkout HITL: check out the cart, expect an interrupt, then approve → order placed → cart cleared.
   {
     const r = await chat({ user_id: uid, thread_id: cartTid, message: 'check out' });
