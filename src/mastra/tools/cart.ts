@@ -7,6 +7,10 @@ export interface CartLine {
   product_id: string; name: string; qty: number;
   unit_price_usd: number; sale_price_usd: number | null;
   applied_coupons: string[]; line_savings: number;
+  /** Coupon $ off this line (the applied promo's % against the effective price × qty).
+   *  0 when no coupon applies. Separate from `line_savings` (sale savings) so the charged
+   *  total is unambiguous: subtotal is pre-coupon, `total` subtracts this. */
+  coupon_savings: number;
 }
 
 /** The `carts` document shape, keyed on {userId, threadId}. Typing the collection with
@@ -22,12 +26,24 @@ export interface CartDoc {
 interface ProductDoc {
   _id: string;
   name: string;
+  category: string;
   price_usd: number;
   sale_price_usd: number | null;
   on_sale: boolean;
 }
 
-export const MUTATING_TOOLS = new Set<string>(['cartAdd', 'cartRemove']);
+/** The `promotions` fields applyCoupon validates against (see schemas/promotions.ts). */
+interface PromotionDoc {
+  code: string;
+  discount_pct: number;
+  applies_to_category: string;
+  product_ids: string[];
+  starts_at: string;
+  ends_at: string;
+  active: boolean;
+}
+
+export const MUTATING_TOOLS = new Set<string>(['cartAdd', 'cartRemove', 'applyCoupon']);
 
 /**
  * A deterministic fingerprint of a cart's contents (product_id + qty per line, order-
@@ -38,19 +54,50 @@ export const MUTATING_TOOLS = new Set<string>(['cartAdd', 'cartRemove']);
  * suspend→resume boundary and across processes/replicas.
  */
 export function cartFingerprint(lines: CartLine[]): string {
-  return lines.map(l => `${l.product_id}:${l.qty}`).sort().join('|');
+  // Include applied coupons in the fingerprint so applying/removing a coupon after the
+  // approval card was shown invalidates the stale quote (same drift guard as qty changes).
+  // Lines with no coupon keep the plain `product_id:qty` form, so pre-coupon fingerprints
+  // (and the tests that pin them) are unchanged.
+  return lines
+    .map(l => {
+      const codes = l.applied_coupons ?? [];
+      return codes.length ? `${l.product_id}:${l.qty}#${[...codes].sort().join(',')}` : `${l.product_id}:${l.qty}`;
+    })
+    .sort()
+    .join('|');
 }
 
-/** Subtotal uses the effective (sale when present) unit price × qty; savings summed from lines. */
-export function computeCartTotals(lines: CartLine[]): { subtotal: number; total_savings: number } {
+/**
+ * Cart totals. `subtotal` is the effective (sale-when-present) unit price × qty, PRE-coupon
+ * (unchanged meaning). `coupon_savings` sums the per-line coupon discounts; `sale_savings`
+ * sums per-line sale savings; `total_savings` is their sum; `total` is the amount actually
+ * charged (subtotal − coupon_savings). With no coupons, `coupon_savings` is 0, so `subtotal`,
+ * `total_savings`, and `total` collapse to the pre-coupon behaviour.
+ */
+export function computeCartTotals(lines: CartLine[]): {
+  subtotal: number; sale_savings: number; coupon_savings: number; total_savings: number; total: number;
+} {
   let subtotal = 0;
-  let total_savings = 0;
+  let sale_savings = 0;
+  let coupon_savings = 0;
   for (const l of lines) {
     const unit = l.sale_price_usd ?? l.unit_price_usd;
     subtotal += unit * l.qty;
-    total_savings += l.line_savings ?? 0;
+    sale_savings += l.line_savings ?? 0;
+    coupon_savings += l.coupon_savings ?? 0;
   }
-  return { subtotal, total_savings };
+  // Round to cents so summed floats don't display binary noise.
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  subtotal = round2(subtotal);
+  sale_savings = round2(sale_savings);
+  coupon_savings = round2(coupon_savings);
+  return {
+    subtotal,
+    sale_savings,
+    coupon_savings,
+    total_savings: round2(sale_savings + coupon_savings),
+    total: round2(subtotal - coupon_savings),
+  };
 }
 
 /**
@@ -95,6 +142,7 @@ async function resolveLine(products: Collection<ProductDoc>, input: any): Promis
     sale_price_usd,
     applied_coupons: [],
     line_savings,
+    coupon_savings: 0,
   };
 }
 
@@ -123,6 +171,7 @@ export function buildCartTools(args: {
 }) {
   const carts = args.db.collection<CartDoc>('carts');
   const products = args.db.collection<ProductDoc>('products');
+  const promotions = args.db.collection<PromotionDoc>('promotions');
   const key = { userId: args.userId, threadId: args.threadId };
   const maxAdds = args.maxDistinctAddsPerTurn ?? 1;
   const addedThisTurn = new Set<string>();
@@ -218,5 +267,76 @@ export function buildCartTools(args: {
       return { ok: true };
     },
   });
-  return { cartRead: read, cartAdd: add, cartRemove: remove };
+  const applyCoupon = createTool({
+    id: 'applyCoupon',
+    description:
+      'Apply a promotional/coupon code (e.g. "SAVE5") to the current cart. Validates the code ' +
+      'against live promotions (must exist, be active, be within its date window, and cover items ' +
+      'in the cart by category or product) and applies the percentage discount to eligible lines ' +
+      'RIGHT NOW — the discount is reflected in the cart total and at checkout. Only ONE code applies ' +
+      'per order (a new code replaces any prior one). If the code cannot be applied, returns ' +
+      '{ ok: false, reason } and changes nothing — never claim a discount was applied in that case.',
+    inputSchema: z.object({ code: z.string() }),
+    execute: async (inputData, context) => {
+      const code = String(inputData.code ?? '').trim();
+      if (!code) return { ok: false, reason: 'No coupon code was provided.' };
+
+      const cart = await carts.findOne(key);
+      const lines = (cart?.lines ?? []) as CartLine[];
+      if (!lines.length) return { ok: false, reason: 'Your cart is empty — add items before applying a coupon.' };
+
+      // Validate the code exists and is active. Match case-insensitively so "save5" works.
+      const promo = await promotions.findOne({
+        code: { $regex: `^${escapeRegex(code)}$`, $options: 'i' } as any,
+      });
+      if (!promo || promo.active !== true) {
+        return { ok: false, reason: `"${code}" is not a valid, active coupon code.` };
+      }
+      // Date window: the code must be currently in effect.
+      const now = Date.now();
+      const startsAt = Date.parse(promo.starts_at);
+      const endsAt = Date.parse(promo.ends_at);
+      if ((Number.isFinite(startsAt) && now < startsAt) || (Number.isFinite(endsAt) && now > endsAt)) {
+        return { ok: false, reason: `Coupon "${promo.code}" is not active right now (outside its valid dates).` };
+      }
+
+      // Resolve each line's category in one batched lookup so we can check scope.
+      const ids = lines.map(l => l.product_id);
+      const prods = await products.find({ _id: { $in: ids as any } }).toArray();
+      const categoryById = new Map(prods.map(p => [String(p._id), p.category]));
+      const eligible = (l: CartLine): boolean =>
+        (promo.product_ids?.length ? promo.product_ids.includes(l.product_id) : false) ||
+        categoryById.get(l.product_id) === promo.applies_to_category;
+
+      // Recompute all lines: clear any prior coupon (one code per order), then stamp the new
+      // code + coupon savings onto eligible lines. Discount applies to the effective (sale)
+      // price so it stacks on top of a sale. Deterministic math — never model arithmetic.
+      let totalCoupon = 0;
+      const next = lines.map(l => {
+        if (!eligible(l)) return { ...l, applied_coupons: [], coupon_savings: 0 };
+        const unit = l.sale_price_usd ?? l.unit_price_usd;
+        const saving = Math.round(unit * l.qty * (promo.discount_pct / 100) * 100) / 100;
+        totalCoupon += saving;
+        return { ...l, applied_coupons: [promo.code], coupon_savings: saving };
+      });
+      if (totalCoupon <= 0) {
+        return {
+          ok: false,
+          reason: `Coupon "${promo.code}" is valid but nothing in your cart qualifies (it applies to ${promo.applies_to_category}).`,
+        };
+      }
+
+      args.onMutate?.();
+      await carts.updateOne(key, { $set: { lines: next, updated_at: new Date().toISOString() } });
+      const totals = computeCartTotals(next);
+      return {
+        ok: true,
+        applied_coupons: [promo.code],
+        coupon_savings: totals.coupon_savings,
+        total: totals.total,
+        summary: `Applied ${promo.code} (${promo.discount_pct}% off ${promo.applies_to_category}): −$${totals.coupon_savings.toFixed(2)}. New total $${totals.total.toFixed(2)}.`,
+      };
+    },
+  });
+  return { cartRead: read, cartAdd: add, cartRemove: remove, applyCoupon };
 }

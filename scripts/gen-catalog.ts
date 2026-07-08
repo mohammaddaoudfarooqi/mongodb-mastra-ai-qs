@@ -29,9 +29,21 @@ function build(): Product[] {
   for (let i = 0; i < COUNT; i++) {
     const category = CATEGORIES[i % CATEGORIES.length];
     const v = VOCAB[category];
-    const noun = v.nouns[Math.floor(i / CATEGORIES.length) % v.nouns.length];
-    const descriptor = DESCRIPTORS[i % DESCRIPTORS.length];
-    const spec = v.specs[Math.floor(i / (CATEGORIES.length * 3)) % v.specs.length];
+    // Within-category rank. Decompose it as a mixed-radix number over
+    // (descriptor, noun, spec) so every (descriptor × noun × spec) combination is used
+    // AT MOST ONCE per category — which makes every product NAME globally unique (nouns
+    // do not repeat across categories). The previous code keyed the descriptor to `i %
+    // DESCRIPTORS.length`, the SAME period as the category, so every product in a category
+    // got the same descriptor (all grocery items were "Signature ..."); combined with slow
+    // noun/spec cycling that collapsed 1505 products into ~394 names, up to 6 sharing a name
+    // at two different prices. Duplicate names made cart adds ambiguous: a name lookup could
+    // resolve to an arbitrary variant and the retrieval-grounding set held conflicting ids,
+    // so the agent could not tell which product_id to add and thrashed.
+    const D = DESCRIPTORS.length, N = v.nouns.length, S = v.specs.length;
+    const rank = Math.floor(i / CATEGORIES.length);
+    const descriptor = DESCRIPTORS[rank % D];
+    const noun = v.nouns[Math.floor(rank / D) % N];
+    const spec = v.specs[Math.floor(rank / (D * N)) % S];
     const name = [descriptor, noun, spec].filter(Boolean).join(' ');
     const price = 5 + ((i * 7) % 200) + 0.99;
     const onSale = i % 4 === 0;
@@ -39,11 +51,13 @@ function build(): Product[] {
       _id: `prod_${String(i + 1).padStart(4, '0')}`,
       name,
       category,
-      description: `${name} — a well-reviewed ${category} product. Durable, dependable, and ready to ship.`,
+      description: `${name}: a well-reviewed ${category} product. Durable, dependable, and ready to ship.`,
       price_usd: Number(price.toFixed(2)),
       sale_price_usd: onSale ? Number((price * 0.8).toFixed(2)) : Number(price.toFixed(2)),
       on_sale: onSale,
-      stock: (i * 3) % 50,
+      // Always in stock for a seamless demo: 20–99 units, never 0 (the old `(i*3)%50`
+      // produced 0-stock items that would block checkout / "add to cart").
+      stock: 20 + ((i * 7) % 80),
       tags: [category, descriptor.toLowerCase()],
     });
   }

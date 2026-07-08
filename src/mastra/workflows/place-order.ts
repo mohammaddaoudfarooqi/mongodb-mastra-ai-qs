@@ -30,6 +30,9 @@ const QuoteSchema = z.object({
   lines: z.array(z.any()),
   subtotal: z.number(),
   total_savings: z.number(),
+  // Coupon $ off folded into total_usd (0 when no coupon). Carried so the confirmation and
+  // the persisted order can report the discount explicitly.
+  coupon_savings: z.number().optional(),
   total_usd: z.number(),
   // Fingerprint of the cart this quote was built from. Carried through suspend→resume so
   // placeOrder can detect (inside the transaction) whether the cart changed after approval.
@@ -84,8 +87,10 @@ export function buildOrderSteps(db: Db) {
         .map(l => l.product_id);
       if (insufficient.length) throw new Error(`Insufficient stock for: ${insufficient.join(', ')}`);
 
-      const { subtotal, total_savings } = computeCartTotals(lines);
-      return { lines, subtotal, total_savings, total_usd: subtotal, cart_version: cartFingerprint(lines) };
+      // total_usd is the amount actually charged: subtotal minus any coupon savings. total_savings
+      // now includes both sale and coupon savings (computeCartTotals folds them together).
+      const { subtotal, coupon_savings, total_savings, total } = computeCartTotals(lines);
+      return { lines, subtotal, coupon_savings, total_savings, total_usd: total, cart_version: cartFingerprint(lines) };
     },
   });
 
@@ -157,12 +162,15 @@ export function buildOrderSteps(db: Db) {
           if (currentVersion !== quote.cart_version) {
             throw new Error('Your cart changed after this order was prepared — review your cart and check out again.');
           }
+          // Union of coupon codes applied across the cart (one per order, but stored as an
+          // array to mirror the line shape and the reference order schema).
+          const couponsUsed = [...new Set(quote.lines.flatMap((l: CartLine) => l.applied_coupons ?? []))];
           await db.collection('orders').insertOne({
             _id: init.orderId as any,
             userId: init.userId,
             status: 'placed',
-            // Persist the effective (sale-when-present) unit price actually charged,
-            // plus the sale price + savings, so the line items reconcile with total_usd.
+            // Persist the effective (sale-when-present) unit price actually charged, plus the
+            // sale price + savings AND any coupon applied, so line items reconcile with total_usd.
             items: quote.lines.map((l: CartLine) => ({
               product_id: l.product_id,
               qty: l.qty,
@@ -170,7 +178,11 @@ export function buildOrderSteps(db: Db) {
               list_price_usd: l.unit_price_usd,
               sale_price_usd: l.sale_price_usd,
               line_savings: l.line_savings,
+              applied_coupons: l.applied_coupons ?? [],
+              coupon_savings: l.coupon_savings ?? 0,
             })),
+            coupons_used: couponsUsed,
+            savings_usd: quote.total_savings,
             total_usd: quote.total_usd,
             placed_at: init.now,
           }, { session });

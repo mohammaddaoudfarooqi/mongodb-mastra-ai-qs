@@ -140,6 +140,9 @@ export interface CartLine {
   sale_price_usd: number | null;
   applied_coupons?: string[];
   line_savings?: number;
+  // Coupon $ off this line (present when a promo code was applied). Separate from
+  // `line_savings` (sale savings) so the two are shown/summed distinctly.
+  coupon_savings?: number;
 }
 
 /**
@@ -150,6 +153,10 @@ export interface CartResponse {
   lines: CartLine[];
   subtotal: number;
   total_savings: number;
+  // Coupon $ off the whole cart, and the amount actually charged (subtotal − coupon_savings).
+  // Both are present once the backend applies a coupon; `total` falls back to `subtotal`.
+  coupon_savings?: number;
+  total?: number;
   updated_at: string | null;
 }
 
@@ -169,6 +176,8 @@ export async function fetchCart(
     lines: [],
     subtotal: 0,
     total_savings: 0,
+    coupon_savings: 0,
+    total: 0,
     updated_at: null,
   };
   try {
@@ -178,10 +187,13 @@ export async function fetchCart(
     });
     if (!res.ok) return empty;
     const body = (await res.json()) as CartResponse;
+    const subtotal = typeof body.subtotal === 'number' ? body.subtotal : 0;
     return {
       lines: Array.isArray(body.lines) ? body.lines : [],
-      subtotal: typeof body.subtotal === 'number' ? body.subtotal : 0,
+      subtotal,
       total_savings: typeof body.total_savings === 'number' ? body.total_savings : 0,
+      coupon_savings: typeof body.coupon_savings === 'number' ? body.coupon_savings : 0,
+      total: typeof body.total === 'number' ? body.total : subtotal,
       updated_at: body.updated_at ?? null,
     };
   } catch {

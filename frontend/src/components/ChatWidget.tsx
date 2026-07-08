@@ -224,6 +224,8 @@ function CartSection({ cart }: { cart: CartResponse | null }) {
         {cart.lines.map((line) => {
           const onSale = line.sale_price_usd != null;
           const unit = onSale ? (line.sale_price_usd as number) : line.unit_price_usd;
+          // Show sale savings and coupon savings together on the line.
+          const lineSavings = (line.line_savings ?? 0) + (line.coupon_savings ?? 0);
           return (
             <li
               key={line.product_id}
@@ -249,7 +251,7 @@ function CartSection({ cart }: { cart: CartResponse | null }) {
               >
                 {line.name}
               </span>
-              {line.line_savings != null && line.line_savings > 0 && (
+              {lineSavings > 0 && (
                 <span
                   style={{
                     flexShrink: 0,
@@ -258,7 +260,7 @@ function CartSection({ cart }: { cart: CartResponse | null }) {
                     color: 'var(--spring-green)',
                   }}
                 >
-                  −{formatUsd(line.line_savings)}
+                  −{formatUsd(lineSavings)}
                 </span>
               )}
               <span
@@ -290,6 +292,25 @@ function CartSection({ cart }: { cart: CartResponse | null }) {
         >
           <span>You save</span>
           <span>{formatUsd(cart.total_savings)}</span>
+        </div>
+      )}
+      {/* Charged total — shown only when a coupon reduced it below the subtotal, so the
+          discounted amount the shopper actually pays is explicit before checkout. */}
+      {cart.total != null && cart.total < cart.subtotal && (
+        <div
+          style={{
+            marginTop: 4,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            fontFamily: 'var(--font-mono)',
+            fontSize: 11,
+            fontWeight: 600,
+            color: 'var(--text)',
+          }}
+        >
+          <span>Total</span>
+          <span>{formatUsd(cart.total)}</span>
         </div>
       )}
     </div>

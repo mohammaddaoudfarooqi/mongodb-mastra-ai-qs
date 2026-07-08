@@ -18,6 +18,22 @@ describe('generateProducts', () => {
     expect(new Set(all.map(p => p._id)).size).toBe(all.length);
   });
 
+  // Regression guard: product NAMES must be globally unique. Duplicate names (the old
+  // generator collapsed 1505 products into ~394 names, up to 6 sharing a name at two
+  // different prices) made cart adds ambiguous — a name lookup resolved to an arbitrary
+  // variant and the grounding set held conflicting ids, so the agent thrashed on "add".
+  it('gives every product a globally unique name', () => {
+    const all = generateProducts();
+    const names = all.map(p => p.name);
+    expect(new Set(names).size).toBe(names.length);
+  });
+
+  // Every product is in stock so the demo never hits a 0-stock "cannot add / cannot check
+  // out" dead end (the old `(i*3)%50` stock formula produced 0-stock items).
+  it('keeps every product in stock (stock > 0)', () => {
+    for (const p of generateProducts()) expect(p.stock).toBeGreaterThan(0);
+  });
+
   it('honors an explicit count for callers that request a slice', () => {
     expect(generateProducts(100)).toHaveLength(100);
   });

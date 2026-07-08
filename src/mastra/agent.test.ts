@@ -45,7 +45,7 @@ describe('buildConcierge', () => {
     const { agent } = buildConcierge(cfg, turn());
     const subs = (agent as any).__getStaticAgents();
     const tools = await (subs.dealsAndCart as any).listTools();
-    expect(Object.keys(tools)).toEqual(expect.arrayContaining(['dataQuery', 'cartAdd', 'cartRead', 'cartRemove']));
+    expect(Object.keys(tools)).toEqual(expect.arrayContaining(['dataQuery', 'cartAdd', 'cartRead', 'cartRemove', 'applyCoupon']));
     // checkout moved to the router (see the topology test above); the specialist must not
     // own it, or a delegated turn could start the order flow without the router's approval
     // framing — and a bare confirmation would again miss the tool.

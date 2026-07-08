@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { Db } from 'mongodb';
 import { buildPlaceOrderWorkflow, buildOrderSteps } from './place-order';
+import { cartFingerprint as cartFingerprintOf } from '../tools/cart';
 
 // Unit tests exercise the STEP logic directly with stubbed collections — no live
 // DB, no LLM. The live transaction + cross-request resume are covered by
@@ -61,7 +62,7 @@ function fakeDb(seed: { carts?: Doc[]; products?: Doc[]; orders?: Doc[] }) {
 
 const LINE = (over: Partial<Doc> = {}): Doc => ({
   product_id: 'p1', name: 'Eco Mug', qty: 2,
-  unit_price_usd: 10, sale_price_usd: 8, applied_coupons: [], line_savings: 4, ...over,
+  unit_price_usd: 10, sale_price_usd: 8, applied_coupons: [], line_savings: 4, coupon_savings: 0, ...over,
 });
 
 const INIT = { userId: 'u1', threadId: 'u1:t1', now: '2026-07-07T00:00:00.000Z', orderId: 'order-fixed-1' };
@@ -78,6 +79,20 @@ describe('place-order workflow steps', () => {
     expect(steps.buildQuote.id).toBe('build-quote');
     expect(steps.approveOrder.id).toBe('approve-order');
     expect(steps.placeOrder.id).toBe('place-order');
+  });
+
+  it('buildQuote charges subtotal minus coupon savings and reports total savings', async () => {
+    // One kitchen line on sale (8, was 10, qty 2 → subtotal 16, sale savings 4) with a
+    // coupon knocking 1.60 off: charged total is 16 − 1.60 = 14.40, savings 4 + 1.60 = 5.60.
+    const { db } = fakeDb({
+      carts: [{ userId: 'u1', threadId: 'u1:t1', lines: [LINE({ applied_coupons: ['SAVE10KIT'], coupon_savings: 1.6 })] }],
+      products: [{ _id: 'p1', stock: 50 }],
+    });
+    const q = await buildOrderSteps(db).buildQuote.execute({ inputData: INIT } as any) as any;
+    expect(q.subtotal).toBe(16);          // pre-coupon
+    expect(q.coupon_savings).toBe(1.6);
+    expect(q.total_usd).toBe(14.4);       // subtotal − coupon (the amount charged)
+    expect(q.total_savings).toBe(5.6);    // sale (4) + coupon (1.6)
   });
 
   // REQ-E-037: identity comes from the workflow input closure; no model-facing
@@ -201,6 +216,32 @@ describe('place-order workflow steps', () => {
     expect(store.orders[0].items[0].list_price_usd).toBe(10);
     expect(store.products[0].stock).toBe(48); // 50 - qty(2)
     expect(store.carts).toHaveLength(0);      // cart cleared
+  });
+
+  // Coupon: the placed order records the discounted total, the coupon codes used, the total
+  // savings, and per-item applied_coupons + coupon_savings so it reconciles with total_usd.
+  it('placeOrder records coupon codes, savings, and the discounted total on the order', async () => {
+    const couponedLine = LINE({ applied_coupons: ['SAVE10KIT'], coupon_savings: 1.6 });
+    const couponedQuote = {
+      lines: [couponedLine], subtotal: 16, coupon_savings: 1.6, total_savings: 5.6,
+      total_usd: 14.4, cart_version: cartFingerprintOf([couponedLine] as any),
+    };
+    const { db, store } = fakeDb({
+      carts: [{ userId: 'u1', threadId: 'u1:t1', lines: [couponedLine] }],
+      products: [{ _id: 'p1', stock: 50 }],
+    });
+    const out = await buildOrderSteps(db).placeOrder.execute({
+      inputData: { decision: 'approve', quote: couponedQuote },
+      getInitData: () => INIT,
+    } as any) as any;
+    expect(out.status).toBe('placed');
+    expect(out.total_usd).toBe(14.4);
+    const order = store.orders[0];
+    expect(order.total_usd).toBe(14.4);
+    expect(order.coupons_used).toEqual(['SAVE10KIT']);
+    expect(order.savings_usd).toBe(5.6);
+    expect(order.items[0].applied_coupons).toEqual(['SAVE10KIT']);
+    expect(order.items[0].coupon_savings).toBe(1.6);
   });
 
   // F3 (TOCTOU): if stock dropped below qty between quote and commit, the conditional
