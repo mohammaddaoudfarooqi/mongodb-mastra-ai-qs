@@ -65,8 +65,10 @@ ssh ec2-user@<public-ip> 'getent hosts <cluster-shard-host>'   # should resolve 
 - Storefront: `http://<public-ip>/`
 - Mastra Studio: `http://<public-ip>:4111/`
 
-All ports (22/80/443/8000/4111) are scoped to `admin_cidr` only — nothing is public. Set
-`admin_cidr` to your VPN CIDR so the storefront and Studio are reachable over the VPN.
+Nothing is world-open. Every app port (22/80/443/8000/4111) is scoped to `office_cidrs` — the
+corporate/VPN network ranges — so the storefront and Studio are reachable only from that network.
+Set `office_cidrs` in your (gitignored) `terraform.tfvars`; the list is kept local and never
+committed. The deploy machine's `admin_cidr` additionally gets SSH and the Atlas seed path.
 
 ## Teardown
 

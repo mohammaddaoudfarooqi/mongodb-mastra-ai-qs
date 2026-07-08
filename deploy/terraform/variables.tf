@@ -50,8 +50,14 @@ variable "expire_on" {
 
 # ── Access control ────────────────────────────────────────────────────────────
 variable "admin_cidr" {
-  description = "CIDR (typically the VPN range or your public IP /32) allowed to reach ALL app ports — SSH (22), HTTP/HTTPS (80/443), the app (8000), and Mastra Studio (4111). In create mode it is also added to the Atlas access list so the deploy machine can seed the cluster over the public path. The wrapper auto-detects a /32 when unset."
+  description = "Deploy machine's CIDR (usually its public IP /32) allowed for SSH (22) and, in create mode, added to the Atlas access list so this host can seed the cluster over the public path. The wrapper auto-detects a /32 when unset. All app ports are additionally reachable from office_cidrs."
   type        = string
+}
+
+variable "office_cidrs" {
+  description = "Corporate/VPN network ranges allowed to reach every app port (22/80/443/8000/4111). Nothing is world-open; access is over these ranges. Set the actual list in the gitignored terraform.tfvars (kept out of version control); empty ⇒ no office/VPN ingress (admin_cidr SSH only)."
+  type        = list(string)
+  default     = []
 }
 
 # ── Networking (CIDR non-overlap is load-bearing for peering) ─────────────────
