@@ -238,6 +238,12 @@ frontend/dist
 # never tracked or pushed to the shared remote)
 archive/
 specs/
+
+# Production-readiness audit artifacts (local scan output; regenerated on demand)
+.production-readiness/
+PRODUCTION_READINESS.md
+frontend/.lighthouseci/
+
 # Deployment-only auth adapter (the hosting platform's SSO integration). Provided at
 # deploy time, never committed to the public repo. See src/server/auth.ts (AUTH_ADAPTER_MODULE).
 src/server/auth-adapter.ts

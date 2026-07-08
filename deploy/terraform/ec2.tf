@@ -55,6 +55,7 @@ resource "aws_instance" "app" {
   root_block_device {
     volume_type = "gp3"
     volume_size = 30
+    encrypted   = true
   }
 
   user_data = templatefile("${path.module}/../scripts/userdata.sh.tftpl", {
