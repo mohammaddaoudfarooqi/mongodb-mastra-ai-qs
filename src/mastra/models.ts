@@ -12,7 +12,7 @@ const MAX_TOKENS: Record<string, number> = {
   'meta.llama4-maverick': 4096,
   // Bedrock cross-region inference-profile ids (see BEDROCK_MODEL_CATALOG).
   'us.anthropic.claude-sonnet-4-5-20250929-v1:0': 8192,
-  'us.anthropic.claude-3-5-haiku-20241022-v1:0': 8192,
+  'us.anthropic.claude-haiku-4-5-20251001-v1:0': 8192,
 };
 
 /** Models that reject an explicit temperature field entirely. */
@@ -52,7 +52,7 @@ export const MODEL_CATALOG: ModelChoice[] = [
  */
 export const BEDROCK_MODEL_CATALOG: ModelChoice[] = [
   { id: 'us.anthropic.claude-sonnet-4-5-20250929-v1:0', label: 'Claude Sonnet 4.5 (Bedrock, balanced)' },
-  { id: 'us.anthropic.claude-3-5-haiku-20241022-v1:0', label: 'Claude Haiku 3.5 (Bedrock, fast)' },
+  { id: 'us.anthropic.claude-haiku-4-5-20251001-v1:0', label: 'Claude Haiku 4.5 (Bedrock, fast)' },
 ];
 
 /**
