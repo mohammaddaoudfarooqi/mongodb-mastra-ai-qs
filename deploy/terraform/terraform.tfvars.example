@@ -1,0 +1,51 @@
+# Copy to terraform.tfvars and fill in the NON-SECRET values below.
+# SECRETS (atlas keys, voyage key, BYO mongo uri, db password) must come from TF_VAR_* env
+# vars — do NOT put them in a committed file. terraform.tfvars is gitignored, but keep the
+# habit of passing secrets via env so they never touch disk in the repo.
+#
+# Example run:
+#   export TF_VAR_atlas_public_key=...   TF_VAR_atlas_private_key=...
+#   export TF_VAR_atlas_org_id=...       TF_VAR_voyage_api_key=...
+#   deploy/scripts/deploy.sh
+
+# ── Mode / region ──────────────────────────────────────────────────────────────
+create_atlas_cluster = true            # false ⇒ BYO: skip Atlas+peering, set TF_VAR_mongodb_uri_byo
+aws_region           = "us-west-2"
+availability_zone    = "us-west-2a"
+name_prefix          = "mastra-ai4"
+
+# ── Access ───────────────────────────────────────────────────────────────────
+# admin_cidr is auto-detected by deploy.sh if omitted (your public IP /32).
+# admin_cidr = "203.0.113.4/32"
+web_cidr   = "0.0.0.0/0"               # scope to the venue network to lock down 80/443
+
+# ── Networking (must not overlap) ──────────────────────────────────────────────
+vpc_cidr    = "10.0.0.0/16"
+subnet_cidr = "10.0.1.0/24"
+atlas_cidr  = "192.168.248.0/21"       # Atlas AWS containers require a /21
+
+# ── Atlas (non-secret bits) ────────────────────────────────────────────────────
+# atlas_project_id  = ""               # empty ⇒ create a project (needs TF_VAR_atlas_org_id)
+atlas_project_name = "mastra-ai4"
+atlas_cluster_name = "mastra-ai4-cluster"
+atlas_db_username  = "mastra_app"
+# atlas_db_password comes from TF_VAR_atlas_db_password, or deploy.sh generates one.
+
+# ── App config ──────────────────────────────────────────────────────────────────
+mongodb_database   = "mongodb_mastra_qs"
+voyage_base_url    = "https://ai.mongodb.com/v1"
+memory_embed_model = "voyage-3.5"
+llm_provider       = "bedrock"
+# Bedrock cross-region inference-profile id. Verify against:
+#   aws bedrock list-inference-profiles --region us-west-2
+bedrock_model_id   = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+
+memory_semantic_recall = "false"
+memory_last_messages   = "10"
+
+# ── Build / instance ──────────────────────────────────────────────────────────
+app_repo_url    = "https://github.com/mohammaddaoudfarooqi/mongodb-mastra-ai-qs.git"
+app_repo_ref    = "main"
+instance_type   = "m6i.large"
+# key_pair_name = "my-existing-key"    # empty ⇒ create one from public_key_path
+public_key_path = "~/.ssh/id_ed25519.pub"

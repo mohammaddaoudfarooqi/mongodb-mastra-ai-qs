@@ -1,0 +1,72 @@
+#!/bin/bash
+# EC2 bootstrap for the Mastra concierge (rendered by ec2.tf via templatefile).
+# Terraform substitutes its own template vars; shell $${...} expansions are escaped.
+set -euo pipefail
+LOG=/var/log/deploy.log
+exec > >(tee -a "$LOG") 2>&1
+
+log() { echo "[$(date -Is)] $*"; }
+
+install_docker() {
+  log "installing docker + git"
+  dnf -y update
+  dnf -y install docker git
+  systemctl enable --now docker
+  # Compose v2 plugin (the `docker compose` subcommand) into the CLI plugins dir.
+  mkdir -p /usr/libexec/docker/cli-plugins
+  curl -fsSL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64" \
+    -o /usr/libexec/docker/cli-plugins/docker-compose
+  chmod +x /usr/libexec/docker/cli-plugins/docker-compose
+  docker compose version
+}
+
+allow_imds_from_containers() {
+  # The app runs in a container and uses the AWS SDK (Bedrock) with the instance role.
+  # By default Docker's bridge blocks container→IMDS (169.254.169.254); allow it so the
+  # SDK's default credential chain can fetch the role creds. Persist across reboot.
+  log "allowing container access to IMDS"
+  iptables -I DOCKER-USER -d 169.254.169.254 -j ACCEPT || true
+  service iptables save 2>/dev/null || iptables-save > /etc/sysconfig/iptables 2>/dev/null || true
+}
+
+fetch_env_from_ssm() {
+  log "fetching env from SSM path ${ssm_path_prefix}"
+  mkdir -p /opt/app
+  : > /opt/app/.env
+  # Pull every param under the prefix, decrypt SecureStrings, write KEY=VALUE lines.
+  aws ssm get-parameters-by-path \
+      --region "${aws_region}" \
+      --path "${ssm_path_prefix}" \
+      --with-decryption --recursive \
+      --query 'Parameters[].[Name,Value]' --output text \
+    | while IFS=$'\t' read -r name value; do
+        key=$(basename "$name")
+        printf '%s=%s\n' "$key" "$value" >> /opt/app/.env
+      done
+  # Safety net: ensure the Bedrock SDK has a region even if the param was missing.
+  grep -q '^AWS_REGION=' /opt/app/.env || echo "AWS_REGION=${aws_region}" >> /opt/app/.env
+  log "wrote $(wc -l < /opt/app/.env) env keys"
+}
+
+clone_and_up() {
+  log "cloning ${app_repo_url}@${app_repo_ref}"
+  rm -rf /opt/app/src
+  git clone --depth 1 --branch "${app_repo_ref}" "${app_repo_url}" /opt/app/src
+  cp /opt/app/.env /opt/app/src/.env
+  cd /opt/app/src
+  log "building + starting containers (app + nginx + studio)"
+  # nginx override publishes :80 → app:8000 (SSE-friendly). The base compose still
+  # publishes 8000 for admin-only direct access. --profile studio also starts Mastra
+  # Studio (the dev/observability UI) on :4111, enabled by default for the demo.
+  docker compose -f docker-compose.yml -f deploy/compose.nginx.yml --profile studio up -d --build
+}
+
+main() {
+  log "== userdata start =="
+  install_docker
+  allow_imds_from_containers
+  fetch_env_from_ssm
+  clone_and_up
+  log "== userdata done =="
+}
+main
