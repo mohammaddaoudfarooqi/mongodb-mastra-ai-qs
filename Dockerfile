@@ -40,7 +40,8 @@ FROM build AS studio
 WORKDIR /app
 ENV NODE_ENV=development
 EXPOSE 4111
-CMD ["pnpm", "exec", "mastra", "dev", "--port", "4111"]
+# Port comes from the PORT env (compose sets PORT=4111); this mastra CLI has no --port flag.
+CMD ["pnpm", "exec", "mastra", "dev"]
 
 # ---- Stage 3: runtime (minimal, non-root) ----
 FROM node:22-alpine AS runtime

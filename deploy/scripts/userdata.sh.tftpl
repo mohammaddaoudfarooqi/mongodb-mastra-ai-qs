@@ -12,12 +12,18 @@ install_docker() {
   dnf -y update
   dnf -y install docker git
   systemctl enable --now docker
-  # Compose v2 plugin (the `docker compose` subcommand) into the CLI plugins dir.
   mkdir -p /usr/libexec/docker/cli-plugins
+  # Compose v2 plugin (the `docker compose` subcommand).
   curl -fsSL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64" \
     -o /usr/libexec/docker/cli-plugins/docker-compose
   chmod +x /usr/libexec/docker/cli-plugins/docker-compose
+  # buildx plugin: the current compose `build` needs buildx >= 0.17; AL2023's bundled
+  # docker ships an older/absent one, so install a recent buildx into the same dir.
+  curl -fsSL "https://github.com/docker/buildx/releases/download/v0.19.3/buildx-v0.19.3.linux-amd64" \
+    -o /usr/libexec/docker/cli-plugins/docker-buildx
+  chmod +x /usr/libexec/docker/cli-plugins/docker-buildx
   docker compose version
+  docker buildx version
 }
 
 allow_imds_from_containers() {
