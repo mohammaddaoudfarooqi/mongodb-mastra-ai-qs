@@ -8,17 +8,17 @@ no second datastore.
 ## One cluster, seven roles
 
 ```
-                         ┌──────────────────────────────────────────────┐
-   React storefront      │                MongoDB Atlas                  │
-   (frontend/, SPA)      │                                               │
+                          ┌───────────────────────────────────────────────┐
+   React storefront       │                MongoDB Atlas                  │
+   (frontend/, SPA)       │                                               │
         │  /api/* SSE     │  products / orders / promotions   (data)      │
         ▼                 │  knowledge_base        (vector + text search) │
   Hono / Mastra server    │  mastra_messages/threads   (agent memory)     │
   (src/server, src/mastra)│  semantic_response_cache   (vector + TTL)     │
         │                 │  orders + products.stock   (transactions)     │
         ▼                 │  mastra_workflow_snapshot  (suspend/resume)   │
-  Concierge router  ──────┤  app_logs                  (logs, TTL)         │
-   ├─ knowledge  spec.    └──────────────────────────────────────────────┘
+  Concierge router  ──────┤  app_logs                  (logs, TTL)        │
+   ├─ knowledge  spec.    └───────────────────────────────────────────────┘
    ├─ dealsAndCart spec.
    └─ place-order workflow (HITL)
         ▲   Voyage embeddings + rerank (multimodal)   LLM (Anthropic / Bedrock)
