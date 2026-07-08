@@ -1,5 +1,7 @@
 import { Mastra } from '@mastra/core';
 import { MongoDBStore } from '@mastra/mongodb';
+import { InMemoryStore } from '@mastra/core/storage';
+import { Observability, MastraStorageExporter } from '@mastra/observability';
 import { registerApiRoute } from '@mastra/core/server';
 import type { ApiRoute, ApiRouteHandler } from '@mastra/core/server';
 import type { Context } from 'hono';
@@ -10,6 +12,7 @@ import { buildOrderRunner } from '../server/order-runner';
 import { buildRouteContext, handlers, type RouteContext } from '../server/routes';
 import { buildSpaRoute } from '../server/static';
 import { initAuth } from '../server/auth';
+import { logger } from '../observability/logger';
 
 /**
  * The browser-facing HTTP routes, registered on the Mastra server under `/api/*`.
@@ -58,17 +61,33 @@ export function buildMastra(cfg: Config = loadConfig()) {
   // Without this the storefront checkout would be dead on Cloud (drift).
   if (!rc.orderRunner) rc.orderRunner = buildOrderRunner(cfg, rc);
 
-  return new Mastra({
+  // Top-level storage persists workflow run snapshots (TABLE_WORKFLOW_SNAPSHOT via
+  // @mastra/mongodb) so a run suspended in the /chat request can be resumed in a separate
+  // /interrupts/resume request (REQ-E-035). Memory keeps its own store on the agent; this
+  // one backs workflows.
+  const storage = new MongoDBStore({ id: 'mastra-store', uri: cfg.mongoUri, dbName: cfg.mongoDb });
+  // Studio's metrics/observability panel needs a metrics-capable observability store.
+  // MongoDB's observability domain persists spans/traces but NOT metrics (no aggregation),
+  // so Studio shows "Metrics require ClickHouse/…/in-memory storage". Route ONLY the
+  // observability domain to an in-memory store (which supports metrics + traces), leaving
+  // workflows/memory/scores durable on MongoDB. In-memory observability is per-process and
+  // resets on restart — fine for the demo; the composite still reports name 'MongoDBStore'.
+  storage.stores.observability = new InMemoryStore({ id: 'obs-inmem' }).stores.observability;
+
+  const mastra = new Mastra({
     agents: { concierge: agent },
     // The HITL order workflow (REQ-E-036): runnable/inspectable in Mastra Studio
     // and resumable by id from the /api/interrupts/resume route. Bound to the
     // shared route-context db (connection-free at construction).
     workflows: { 'place-order': buildPlaceOrderWorkflow(rc.db) },
-    // Top-level storage persists workflow run snapshots (TABLE_WORKFLOW_SNAPSHOT
-    // via @mastra/mongodb) so a run suspended in the /chat request can be resumed
-    // in a separate /interrupts/resume request (REQ-E-035). Memory keeps its own
-    // store on the agent; this one backs workflows.
-    storage: new MongoDBStore({ id: 'mastra-store', uri: cfg.mongoUri, dbName: cfg.mongoDb }),
+    storage,
+    // Observability entrypoint: feeds the Studio traces + metrics panels. The storage
+    // exporter buffers spans/metrics/logs and flushes them to the instance's observability
+    // store (the in-memory one wired above). Enabled for both the app and the `mastra dev`
+    // studio process (same buildMastra), so metrics populate in Studio.
+    observability: new Observability({
+      configs: { default: { serviceName: 'concierge', exporters: [new MastraStorageExporter()] } },
+    }),
     server: {
       // Move Mastra's built-in route prefix off `/api` so our custom `/api/*`
       // routes (which the frontend calls) do not collide with it (REQ-E-003).
@@ -83,6 +102,18 @@ export function buildMastra(cfg: Config = loadConfig()) {
       ],
     },
   });
+
+  // Registering an observability entrypoint makes Mastra eagerly initialize storage (to wire
+  // the exporter to the observability store), which kicks off MongoDB default-index creation.
+  // Attach a catch so a failed/slow init (an unreachable cluster, or a placeholder URI in unit
+  // tests) surfaces as a logged warning instead of an unhandled promise rejection that could
+  // crash the process or leak across test files. Against a reachable cluster this resolves
+  // quietly and the index creation still happens.
+  void mastra.getStorage()?.init?.().catch((err: unknown) => {
+    logger.warn('mastra storage init failed (non-fatal)', { err: String(err) });
+  });
+
+  return mastra;
 }
 
 export const mastra = buildMastra();

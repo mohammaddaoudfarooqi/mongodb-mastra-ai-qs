@@ -33,6 +33,7 @@
     "@mastra/core": "latest",
     "@mastra/memory": "latest",
     "@mastra/mongodb": "latest",
+    "@mastra/observability": "^1.16.0",
     "@mastra/voyageai": "latest",
     "@napi-rs/canvas": "^1.0.2",
     "hono": "^4",

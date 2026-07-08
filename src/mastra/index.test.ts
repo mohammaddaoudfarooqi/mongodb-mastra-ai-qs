@@ -69,6 +69,23 @@ describe('buildMastra (INV-007: concierge agent + REQ-E-003: apiPrefix)', () => 
     expect(mastra.getWorkflow('place-order')).toBeDefined();
   });
 
+  // Studio metrics require a real (non-NoOp) observability entrypoint whose observability
+  // store supports metrics. We keep MongoDB as the durable top-level store but route ONLY
+  // the observability domain to an in-memory store (which supports metrics + traces), so
+  // Studio's metrics panel populates instead of showing the "requires ClickHouse/…/in-memory"
+  // message. Assert both: a configured observability entrypoint, and the in-memory obs domain.
+  it('configures a real observability entrypoint with a metrics-capable (in-memory) obs store', async () => {
+    const mastra = (await mod()).buildMastra(cfg);
+    const obs = mastra.observability as any;
+    expect(obs).toBeDefined();
+    expect(obs.constructor?.name).not.toBe('NoOpObservability');
+    const storage = mastra.getStorage() as any;
+    // Top-level store stays MongoDB (durable workflows) …
+    expect(storage?.name).toBe('MongoDBStore');
+    // … but the observability domain is the in-memory one (metrics-capable).
+    expect(storage?.stores?.observability?.constructor?.name).toContain('InMemory');
+  });
+
   it('registers every browser route on the server under /api/*', async () => {
     const mastra = (await mod()).buildMastra(cfg);
     const routes = mastra.getServer()?.apiRoutes ?? [];
