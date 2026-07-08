@@ -10,8 +10,17 @@
 #
 # CIDR non-overlap (var.atlas_cidr /21 vs var.vpc_cidr) is asserted by the deploy wrapper.
 
+# Existing AWS network containers in the project (a reused project may already have one
+# for our region — Atlas allows only one per region+provider, so we reuse it).
+data "mongodbatlas_network_containers" "aws" {
+  count         = local.use_atlas ? 1 : 0
+  project_id    = local.project_id
+  provider_name = "AWS"
+}
+
+# Create a container only when none exists for our region (see locals.create_container).
 resource "mongodbatlas_network_container" "aws" {
-  count            = local.use_atlas ? 1 : 0
+  count            = local.create_container ? 1 : 0
   project_id       = local.project_id
   atlas_cidr_block = var.atlas_cidr
   provider_name    = "AWS"
@@ -21,7 +30,7 @@ resource "mongodbatlas_network_container" "aws" {
 resource "mongodbatlas_network_peering" "aws" {
   count                  = local.use_atlas ? 1 : 0
   project_id             = local.project_id
-  container_id           = mongodbatlas_network_container.aws[0].container_id
+  container_id           = local.atlas_container_id
   provider_name          = "AWS"
   accepter_region_name   = var.aws_region
   aws_account_id         = data.aws_caller_identity.current.account_id
@@ -41,7 +50,7 @@ resource "aws_vpc_peering_connection_accepter" "atlas" {
 resource "aws_route" "to_atlas" {
   count                     = local.use_atlas ? 1 : 0
   route_table_id            = aws_route_table.main.id
-  destination_cidr_block    = var.atlas_cidr
+  destination_cidr_block    = local.atlas_cidr_effective
   vpc_peering_connection_id = aws_vpc_peering_connection_accepter.atlas[0].vpc_peering_connection_id
 
   depends_on = [aws_vpc_peering_connection_accepter.atlas]

@@ -4,6 +4,24 @@ locals {
   # Atlas region form: us-west-2 → US_WEST_2.
   atlas_region = upper(replace(var.aws_region, "-", "_"))
 
+  # Atlas permits only ONE network container per (project, provider, region). A reused
+  # project may already have one for our region (from prior peering); creating another
+  # 409s (OVERLAPPING_ATLAS_CIDR_BLOCK / DUPLICATE). So look up existing AWS containers
+  # and, if one matches our region, reuse it (its id + its CIDR) instead of creating.
+  _existing_containers = local.use_atlas ? [
+    for c in data.mongodbatlas_network_containers.aws[0].results : c
+    if c.region_name == local.atlas_region
+  ] : []
+  # NOTE: the data source's element id field is `id` (the resource's is `container_id`).
+  _existing_container_id   = length(local._existing_containers) > 0 ? local._existing_containers[0].id : ""
+  _existing_container_cidr = length(local._existing_containers) > 0 ? local._existing_containers[0].atlas_cidr_block : ""
+
+  create_container   = local.use_atlas && local._existing_container_id == ""
+  atlas_container_id = local.create_container ? (local.use_atlas ? mongodbatlas_network_container.aws[0].container_id : "") : local._existing_container_id
+  # CIDR actually routed to Atlas: the new container uses var.atlas_cidr; a reused one
+  # keeps whatever CIDR it was created with.
+  atlas_cidr_effective = local.create_container ? var.atlas_cidr : local._existing_container_cidr
+
   # Project id: reuse the passed-in id, else the project Terraform creates.
   project_id = var.create_atlas_cluster && var.atlas_project_id == "" ? mongodbatlas_project.this[0].id : var.atlas_project_id
 
