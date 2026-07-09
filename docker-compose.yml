@@ -48,6 +48,10 @@ services:
     env_file: .env
     environment:
       PORT: "4111"
+      # Fallback host baked into studio/index.html by the entrypoint so a remote
+      # browser self-connects (no "config" prompt). Auto-detect (window.location.origin)
+      # handles the common case; this is only the fallback. Empty locally is fine.
+      STUDIO_PUBLIC_HOST: "${STUDIO_PUBLIC_HOST:-}"
     ports:
       - "4111:4111"
     restart: unless-stopped

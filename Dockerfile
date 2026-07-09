@@ -40,8 +40,14 @@ FROM build AS studio
 WORKDIR /app
 ENV NODE_ENV=development
 EXPOSE 4111
+# The entrypoint launches `mastra dev` and re-patches studio/index.html on every start
+# (mastra rebundles it with %%...%% placeholders each boot), so a remote browser
+# self-connects instead of prompting for the Mastra instance URL. STUDIO_PUBLIC_HOST
+# (optional, e.g. the EC2 public DNS) is baked in as the fallback host.
+COPY deploy/studio-entrypoint.sh /usr/local/bin/studio-entrypoint.sh
+RUN chmod +x /usr/local/bin/studio-entrypoint.sh
 # Port comes from the PORT env (compose sets PORT=4111); this mastra CLI has no --port flag.
-CMD ["pnpm", "exec", "mastra", "dev"]
+CMD ["/usr/local/bin/studio-entrypoint.sh"]
 
 # ---- Stage 3: runtime (minimal, non-root) ----
 FROM node:22-alpine AS runtime

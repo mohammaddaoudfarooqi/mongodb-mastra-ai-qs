@@ -60,30 +60,26 @@ clone_and_up() {
   git clone --depth 1 --branch "${app_repo_ref}" "${app_repo_url}" /opt/app/src
   cp /opt/app/.env /opt/app/src/.env
   cd /opt/app/src
+
+  # Studio auto-connect: `mastra dev` rebundles studio/index.html with the raw
+  # placeholders %%MASTRA_AUTO_DETECT_URL%% / %%MASTRA_SERVER_HOST%% on EVERY start
+  # and templates them per-request to serverHost=localhost, so a remote browser is
+  # prompted for the Mastra instance URL. The studio container's entrypoint
+  # (deploy/studio-entrypoint.sh) re-patches the file on every start; feed it the
+  # instance public DNS as the fallback host via STUDIO_PUBLIC_HOST. Because it runs
+  # per-start (not just first boot), the prompt no longer returns after a restart.
+  local dns
+  dns=$(curl -fsS http://169.254.169.254/latest/meta-data/public-hostname 2>/dev/null || echo "")
+  grep -q '^STUDIO_PUBLIC_HOST=' /opt/app/src/.env \
+    && sed -i "s|^STUDIO_PUBLIC_HOST=.*|STUDIO_PUBLIC_HOST=$dns|" /opt/app/src/.env \
+    || echo "STUDIO_PUBLIC_HOST=$dns" >> /opt/app/src/.env
+  log "studio public host set to $dns"
+
   log "building + starting containers (app + nginx + studio)"
   # nginx override publishes :80 → app:8000 (SSE-friendly). The base compose still
   # publishes 8000 for admin-only direct access. --profile studio also starts Mastra
   # Studio (the dev/observability UI) on :4111, enabled by default for the demo.
   docker compose -f docker-compose.yml -f deploy/compose.nginx.yml --profile studio up -d --build
-
-  # Studio auto-connect: `mastra dev` serves .mastra/output/studio/index.html and
-  # templates it per-request with serverHost=localhost, so a remote browser prompts
-  # for the Mastra instance URL. Bake concrete values into the served file so the
-  # per-request templater has nothing left to override: set MASTRA_AUTO_DETECT_URL to
-  # 'true' (the client then uses window.location.origin — whatever host/port the
-  # browser loaded Studio from) and the host to the instance's public DNS as a
-  # fallback. Wait for the file to exist (dev server bundles it a few s after boot).
-  local dns idx="/app/.mastra/output/studio/index.html"
-  dns=$(curl -fsS http://169.254.169.254/latest/meta-data/public-hostname 2>/dev/null || echo "")
-  local i
-  for i in $(seq 1 30); do
-    if docker compose --profile studio exec -T studio sh -c "[ -f $idx ]" 2>/dev/null; then
-      docker compose --profile studio exec -T studio sh -c \
-        "sed -i \"s/%%MASTRA_AUTO_DETECT_URL%%/true/g; s/%%MASTRA_SERVER_HOST%%/$dns/g\" $idx" \
-        && log "studio auto-detect URL enabled (host=$dns)" && break
-    fi
-    sleep 5
-  done
 }
 
 main() {

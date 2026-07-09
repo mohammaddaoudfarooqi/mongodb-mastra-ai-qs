@@ -133,3 +133,9 @@ profiles are enabled. If you enable only Sonnet, switching the picker to Haiku r
 - **Studio metrics:** the app configures an in-memory observability store for the metrics
   domain (MongoDB persists traces/spans but not metrics), so Mastra Studio's metrics panel
   populates. In-memory metrics are per-process and reset on restart — expected for the demo.
+- **Studio auto-connect:** `mastra dev` rebundles `studio/index.html` with URL placeholders
+  on every start and templates them to `localhost` per request, so a remote browser would be
+  prompted for the Mastra instance URL. The studio container's entrypoint
+  (`deploy/studio-entrypoint.sh`) re-patches the file on every start — auto-detect
+  (`window.location.origin`) plus `STUDIO_PUBLIC_HOST` (set by userdata to the EC2 public DNS)
+  as fallback — so the prompt no longer returns after a studio/instance restart.
