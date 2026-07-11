@@ -269,6 +269,44 @@ describe('buildCartTools identity binding', () => {
     const cart: any = await buildCartTools({ db, ...key }).cartRead.execute!({} as any, {} as any);
     expect(cart.lines).toHaveLength(2);
   });
+
+  // Grounded-set sizing (the recipe-ingredient fix): when a dataQuery surfaced several
+  // distinct products this turn, adding each of THOSE grounded products must succeed even
+  // with the default phrasing cap of 1. This is what makes "share a recipe" → "Add to cart"
+  // add all N ingredients regardless of the phrasing not tripping isBulkAddIntent. The
+  // grounding gate still bounds it: only products in turnProductIds can be added at all.
+  it('sizes the distinct-add cap to the grounded set (adds every grounded product at cap=1)', async () => {
+    const { db } = stubDb();
+    // A recipe query surfaced three ingredient products this turn.
+    const turnProductIds = new Set(['prod_0021', 'prod_0061', 'prod_0099']);
+    const { cartAdd } = buildCartTools({ db, ...key, turnProductIds }); // maxDistinctAddsPerTurn defaults to 1
+    const a: any = await cartAdd.execute!({ line: { product_id: 'prod_0021', qty: 1 } } as any, {} as any);
+    const b: any = await cartAdd.execute!({ line: { product_id: 'prod_0061', qty: 1 } } as any, {} as any);
+    const c: any = await cartAdd.execute!({ line: { product_id: 'prod_0099', qty: 1 } } as any, {} as any);
+    expect(a.ok).toBe(true);
+    expect(b.ok).toBe(true);
+    expect(c.ok).toBe(true);
+    const cart: any = await buildCartTools({ db, ...key }).cartRead.execute!({} as any, {} as any);
+    expect(cart.lines).toHaveLength(3);
+  });
+
+  // The grounded set grows AS the turn runs (dataQuery fires per ingredient, then cartAdd).
+  // Because turnProductIds is a shared reference read at add-time, a product added after the
+  // set expands must still be allowed — the cap can't be frozen at build time.
+  it('re-reads the grounded set at add-time as it grows during the turn', async () => {
+    const { db } = stubDb();
+    const turnProductIds = new Set<string>();
+    const { cartAdd } = buildCartTools({ db, ...key, turnProductIds });
+    turnProductIds.add('prod_0021');
+    const a: any = await cartAdd.execute!({ line: { product_id: 'prod_0021', qty: 1 } } as any, {} as any);
+    // Second ingredient's dataQuery only now surfaces prod_0061.
+    turnProductIds.add('prod_0061');
+    const b: any = await cartAdd.execute!({ line: { product_id: 'prod_0061', qty: 1 } } as any, {} as any);
+    expect(a.ok).toBe(true);
+    expect(b.ok).toBe(true);
+    const cart: any = await buildCartTools({ db, ...key }).cartRead.execute!({} as any, {} as any);
+    expect(cart.lines).toHaveLength(2);
+  });
 });
 
 // applyCoupon closes the gap that let the agent promise "SAVE5 will be applied at checkout"

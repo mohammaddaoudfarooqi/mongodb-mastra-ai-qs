@@ -45,6 +45,12 @@ interface PromotionDoc {
 
 export const MUTATING_TOOLS = new Set<string>(['cartAdd', 'cartRemove', 'applyCoupon']);
 
+// Hard ceiling on the distinct-add cap regardless of how many products a turn grounds. A
+// single dataQuery is bounded by dataAgentLimit (default 25), but several queries in one turn
+// could accumulate more into turnProductIds; this caps the blast radius of grounded-sizing so
+// a runaway can never balloon the cart past a sane per-turn maximum.
+const MAX_DISTINCT_ADDS_CEILING = 25;
+
 /**
  * A deterministic fingerprint of a cart's contents (product_id + qty per line, order-
  * independent). Used to bind a checkout quote to the exact cart it was built from: if the
@@ -173,8 +179,18 @@ export function buildCartTools(args: {
   const products = args.db.collection<ProductDoc>('products');
   const promotions = args.db.collection<PromotionDoc>('promotions');
   const key = { userId: args.userId, threadId: args.threadId };
-  const maxAdds = args.maxDistinctAddsPerTurn ?? 1;
+  const phrasingCap = args.maxDistinctAddsPerTurn ?? 1;
   const addedThisTurn = new Set<string>();
+  // Effective distinct-add cap, evaluated at add-time (NOT frozen at build time): the larger
+  // of the phrasing cap and the number of DISTINCT products a dataQuery grounded this turn.
+  // The grounded set grows as the turn runs (dataQuery fires per item, then cartAdd), and only
+  // its members can be added at all (the grounding gate below), so sizing the cap to it lets a
+  // recipe's N ingredients all be added even when the phrasing ("Add to cart", "add the
+  // ingredients") didn't trip isBulkAddIntent — the class of bug that dropped 5 of 6 pasta
+  // ingredients. The grounding gate is the real ballooning bound; this just stops the cap from
+  // rejecting products the shopper's own query surfaced.
+  const distinctAddCap = () =>
+    Math.min(MAX_DISTINCT_ADDS_CEILING, Math.max(phrasingCap, args.turnProductIds?.size ?? 0));
   const read = createTool({
     id: 'cartRead',
     description: 'Read the current shopping cart for this conversation.',
@@ -235,6 +251,7 @@ export function buildCartTools(args: {
       // Per-turn distinct-add cap: refuse a 2nd distinct product in one turn unless the
       // tools were built to allow several. Blocks the spurious multi-add that balloons the
       // cart on a single-item request (verify:demo caught 3 lines from one turn).
+      const maxAdds = distinctAddCap();
       if (!addedThisTurn.has(line.product_id) && addedThisTurn.size >= maxAdds) {
         logger.info('cart add cap hit', { product_id: line.product_id, addedThisTurn: addedThisTurn.size, maxAdds });
         return {
