@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { generateProducts, generateOrders, generatePromotions, CATEGORIES, TEXT_KNOWLEDGE, loadAssetManifest } from './fixtures';
+import { generateProducts, generateOrders, generatePromotions, CATEGORIES, TEXT_KNOWLEDGE, loadAssetManifest, RECIPE_INGREDIENTS } from './fixtures';
 import { PRODUCTS_SCHEMA } from '../mastra/schemas/products';
 
 describe('generateProducts', () => {
@@ -36,6 +36,44 @@ describe('generateProducts', () => {
 
   it('honors an explicit count for callers that request a slice', () => {
     expect(generateProducts(100)).toHaveLength(100);
+  });
+
+  // BUGFIX: a recipe in the KB (20-Minute Garlic Butter Pasta) lists ingredients — spaghetti,
+  // butter, garlic, chili flakes, parmesan, parsley — that had NO matching product, so the
+  // agent told the shopper "we don't carry those" when asked to add the ingredients. The demo
+  // must be able to add every recipe ingredient. Guarantee an in-stock grocery product for each.
+  it('includes an in-stock, purchasable product for every recipe ingredient', () => {
+    const all = generateProducts();
+    for (const ing of RECIPE_INGREDIENTS) {
+      const match = all.find(
+        p => ing.match.every(kw => p.name.toLowerCase().includes(kw)) && p.stock > 0,
+      );
+      expect(match, `no in-stock product for recipe ingredient "${ing.label}"`).toBeTruthy();
+    }
+  });
+
+  it('keeps recipe-ingredient product ids and names globally unique too', () => {
+    const all = generateProducts();
+    expect(new Set(all.map(p => p._id)).size).toBe(all.length);
+    expect(new Set(all.map(p => p.name)).size).toBe(all.length);
+  });
+
+  // Anti-reoccurrence guard (mirrors the sibling deep-agents app's build-time assertion):
+  // every ingredient KEYWORD named in a recipe KB doc must be covered by RECIPE_INGREDIENTS,
+  // so adding a new recipe that references an uncovered ingredient FAILS here instead of
+  // silently shipping a catalog gap the agent surfaces as "we don't carry that".
+  it('covers every ingredient keyword mentioned in the recipe knowledge base', () => {
+    const recipes = TEXT_KNOWLEDGE.filter(d => /recipe/i.test(d.id) || /recipe/i.test(d.title));
+    expect(recipes.length).toBeGreaterThan(0);
+    // Keywords the demo must be able to add. Extend RECIPE_INGREDIENTS when adding a recipe.
+    const KNOWN = ['spaghetti', 'butter', 'garlic', 'chili', 'parmesan', 'parsley'];
+    const covered = new Set(RECIPE_INGREDIENTS.flatMap(i => i.match));
+    for (const kw of KNOWN) {
+      const inSomeRecipe = recipes.some(r => r.text.toLowerCase().includes(kw));
+      if (inSomeRecipe) {
+        expect(covered.has(kw), `recipe ingredient "${kw}" is not covered by RECIPE_INGREDIENTS`).toBe(true);
+      }
+    }
   });
 
   it('is stable across calls', () => {

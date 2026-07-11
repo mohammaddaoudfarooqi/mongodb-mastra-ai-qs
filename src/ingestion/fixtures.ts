@@ -21,9 +21,49 @@ function loadCatalog(): Product[] {
   return CATALOG_CACHE;
 }
 
-/** Loads the committed realistic catalog. With `count`, returns the first N entries. */
+/**
+ * Recipe ingredients the knowledge base's recipes reference (currently the 20-Minute Garlic
+ * Butter Pasta). The demo must be able to ADD every one of these to the cart, so each is
+ * guaranteed a real, in-stock grocery product (see recipeIngredientProducts). `match` is the
+ * set of lowercase substrings that must all appear in a product name to count as that ingredient
+ * — kept in sync with the recipe text and asserted by fixtures.test.ts.
+ */
+export const RECIPE_INGREDIENTS: { label: string; name: string; match: string[]; price: number }[] = [
+  { label: 'spaghetti',    name: 'Spaghetti Pasta 16oz',          match: ['spaghetti'],          price: 2.49 },
+  { label: 'butter',       name: 'Unsalted Butter 16oz',          match: ['butter'],             price: 4.99 },
+  { label: 'garlic',       name: 'Fresh Garlic Bulbs 3-pack',     match: ['garlic'],             price: 1.99 },
+  { label: 'chili flakes', name: 'Crushed Chili Flakes 2oz',      match: ['chili', 'flakes'],    price: 3.49 },
+  { label: 'parmesan',     name: 'Grated Parmesan Cheese 8oz',    match: ['parmesan'],           price: 6.99 },
+  { label: 'parsley',      name: 'Fresh Parsley Bunch',           match: ['parsley'],            price: 1.79 },
+];
+
+/**
+ * Concrete in-stock grocery products for every RECIPE_INGREDIENTS entry. Ids live in a reserved
+ * `prod_9xxx` range so they never collide with the generated catalog (`prod_0001`..`prod_1505`).
+ * Without these, a shopper asking to "add the pasta recipe ingredients" got "we don't carry
+ * those" because the generated grocery vocab has only generic "Pasta" (no spaghetti/garlic/etc.).
+ */
+export function recipeIngredientProducts(): Product[] {
+  return RECIPE_INGREDIENTS.map((ing, i) => ({
+    _id: `prod_9${String(i + 1).padStart(3, '0')}`,
+    name: ing.name,
+    category: 'grocery',
+    description: `${ing.name}: a fresh grocery staple, perfect for home cooking. In stock and ready to ship.`,
+    price_usd: ing.price,
+    sale_price_usd: ing.price,
+    on_sale: false,
+    stock: 99,
+    tags: ['grocery', 'recipe-ingredient'],
+  }));
+}
+
+/**
+ * Loads the committed realistic catalog PLUS the guaranteed recipe-ingredient products.
+ * With `count`, returns the first N entries of the combined list. The recipe products are
+ * appended so a `count` slice used elsewhere still yields the generated catalog first.
+ */
 export function generateProducts(count?: number): Product[] {
-  const all = loadCatalog();
+  const all = [...loadCatalog(), ...recipeIngredientProducts()];
   return count === undefined ? all : all.slice(0, count);
 }
 
