@@ -107,6 +107,58 @@ export function computeCartTotals(lines: CartLine[]): {
 }
 
 /**
+ * Merge cart lines from several documents into one, unioning by product_id and summing qty for
+ * repeats. Order-stable (first occurrence wins position). Used by the dedupe migration below.
+ */
+export function mergeCartLines(lineSets: CartLine[][]): CartLine[] {
+  const byId = new Map<string, CartLine>();
+  for (const lines of lineSets) {
+    for (const l of lines ?? []) {
+      const prev = byId.get(l.product_id);
+      if (prev) prev.qty += l.qty;
+      else byId.set(l.product_id, { ...l });
+    }
+  }
+  return [...byId.values()];
+}
+
+/**
+ * Provision the authoritative `carts` guard: a UNIQUE index on {userId, threadId}. Without it,
+ * concurrent bulk `cartAdd` upserts (Mastra runs tool calls near-simultaneously) each INSERT a
+ * separate document for the same key, splitting one shopper's cart across several docs. Checkout
+ * reads/deletes with a single findOne/deleteOne on the key, so it quotes and clears only ONE of
+ * them — the sibling docs' lines survive as phantom cart items after an order (the "1 item still
+ * in cart after checkout" bug).
+ *
+ * A unique index cannot be created while duplicates exist, so this first MIGRATES: for every key
+ * with >1 doc, merge all lines into the most-recently-updated doc (union by product_id, summing
+ * qty), delete the rest, THEN create the unique index. Idempotent — safe to re-run.
+ */
+export async function provisionCartIndex(db: Db): Promise<void> {
+  const carts = db.collection<CartDoc>('carts');
+  const dupes = await carts.aggregate<{ _id: { userId: string; threadId: string }; count: number }>([
+    { $group: { _id: { userId: '$userId', threadId: '$threadId' }, count: { $sum: 1 } } },
+    { $match: { count: { $gt: 1 } } },
+  ]).toArray();
+  for (const { _id: k } of dupes) {
+    const docs = await carts.find({ userId: k.userId, threadId: k.threadId }).toArray();
+    // Newest by updated_at wins as the surviving doc (falls back to insertion order).
+    const ts = (d: CartDoc) => (d.updated_at ? new Date(d.updated_at).getTime() : 0);
+    const sorted = [...docs].sort((a, b) => ts(b) - ts(a));
+    const survivor = sorted[0];
+    const mergedLines = mergeCartLines(docs.map(d => d.lines ?? []));
+    await carts.updateOne(
+      { _id: (survivor as any)._id },
+      { $set: { lines: mergedLines, updated_at: survivor.updated_at ?? new Date() } },
+    );
+    const loserIds = sorted.slice(1).map(d => (d as any)._id);
+    if (loserIds.length) await carts.deleteMany({ _id: { $in: loserIds } });
+    logger.info('carts dedupe', { userId: k.userId, threadId: k.threadId, merged: docs.length, lines: mergedLines.length });
+  }
+  await carts.createIndex({ userId: 1, threadId: 1 }, { unique: true, name: 'carts_user_thread_unique' });
+}
+
+/**
  * Cart tools are bound to the turn's real {userId, threadId} via closure — the model
  * never supplies identity, so it cannot write to (or read) the wrong cart. The same key
  * is what the UI reads at GET /cart, so what the agent builds is exactly what renders.
@@ -114,6 +166,12 @@ export function computeCartTotals(lines: CartLine[]): {
 /** Escape a user/model-supplied string for safe use inside a RegExp (anchored name lookup). */
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** True for a MongoDB duplicate-key (E11000) error — the driver sets `code === 11000`. Used to
+ *  detect a concurrent cart insert losing the race under the unique {userId,threadId} index. */
+function isDuplicateKeyError(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 11000;
 }
 
 /**
@@ -263,11 +321,25 @@ export function buildCartTools(args: {
       }
       args.onMutate?.();
       addedThisTurn.add(line.product_id);
-      await carts.updateOne(
-        key,
-        { $push: { lines: line }, $set: { updated_at: new Date() } },
-        { upsert: true },
-      );
+      try {
+        await carts.updateOne(
+          key,
+          { $push: { lines: line }, $set: { updated_at: new Date() } },
+          { upsert: true },
+        );
+      } catch (err) {
+        // Concurrent bulk-add race: under the unique {userId,threadId} index, a sibling cartAdd
+        // won the insert race and materialized the doc after our findOne saw nothing, so our own
+        // upsert insert is rejected with E11000. The doc now EXISTS, so retry as a plain $push
+        // (no upsert) to land this line in the ONE cart doc — never a second split document that
+        // checkout's single findOne/deleteOne would quote/clear only partially (the "1 item
+        // survives after checkout" bug). See scripts/provision-indexes.ts for the index.
+        if (!isDuplicateKeyError(err)) throw err;
+        await carts.updateOne(
+          key,
+          { $push: { lines: line }, $set: { updated_at: new Date() } },
+        );
+      }
       return { ok: true, line };
     },
   });

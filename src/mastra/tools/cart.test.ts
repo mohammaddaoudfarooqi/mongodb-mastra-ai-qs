@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { Db } from 'mongodb';
-import { buildCartTools, computeCartTotals, MUTATING_TOOLS, type CartLine } from './cart';
+import { buildCartTools, computeCartTotals, mergeCartLines, provisionCartIndex, MUTATING_TOOLS, type CartLine } from './cart';
 
 const line = (over: Partial<CartLine> = {}): CartLine => ({
   product_id: 'p', name: 'n', qty: 1, unit_price_usd: 10, sale_price_usd: null,
@@ -49,13 +49,26 @@ describe('computeCartTotals', () => {
  * product data), and a `promotions` collection (so applyCoupon can validate codes).
  * `products` seeds a couple of catalog docs the tests look up.
  */
-function stubDb(products: any[] = PRODUCTS, promotions: any[] = PROMOTIONS) {
-  const calls: { op: string; filter: any; update?: any }[] = [];
+function stubDb(products: any[] = PRODUCTS, promotions: any[] = PROMOTIONS, opts: { raceOnUpsert?: CartLine } = {}) {
+  const calls: { op: string; filter: any; update?: any; options?: any }[] = [];
   let doc: any = null;
+  // When armed, the FIRST upserting updateOne that would insert (no doc yet) simulates a
+  // concurrent writer winning the race under a unique {userId,threadId} index: the sibling
+  // insert already materialized the doc (with `raceOnUpsert`'s line), so our own upsert insert
+  // is rejected with an E11000 duplicate-key error. This is the production bulk-add race.
+  let raceArmed: CartLine | null = opts.raceOnUpsert ?? null;
   const carts = {
     findOne: async (filter: any) => { calls.push({ op: 'findOne', filter }); return doc; },
-    updateOne: async (filter: any, update: any) => {
-      calls.push({ op: 'updateOne', filter, update });
+    updateOne: async (filter: any, update: any, options?: any) => {
+      calls.push({ op: 'updateOne', filter, update, options });
+      if (options?.upsert && doc === null && raceArmed) {
+        // The concurrent winner created the doc; our upsert insert violates the unique index.
+        doc = { userId: filter.userId, threadId: filter.threadId, lines: [raceArmed], updated_at: new Date() };
+        raceArmed = null;
+        const err: any = new Error('E11000 duplicate key error collection: carts index: userId_1_threadId_1');
+        err.code = 11000;
+        throw err;
+      }
       doc ??= { userId: filter.userId, threadId: filter.threadId, lines: [] };
       if (update.$push?.lines) doc.lines.push(update.$push.lines);
       if (update.$pull?.lines) {
@@ -306,6 +319,111 @@ describe('buildCartTools identity binding', () => {
     expect(b.ok).toBe(true);
     const cart: any = await buildCartTools({ db, ...key }).cartRead.execute!({} as any, {} as any);
     expect(cart.lines).toHaveLength(2);
+  });
+
+  // Concurrent bulk-add race (the "1 item survives after checkout" bug): under a unique
+  // {userId,threadId} index, when a sibling cartAdd wins the insert race our own upsert insert
+  // is rejected with E11000. cartAdd must recover by re-pushing the line onto the now-existing
+  // doc (a plain $push, no upsert) so the item still lands in the ONE cart doc — never a second
+  // split document that checkout's single findOne/deleteOne would miss.
+  it('recovers from a duplicate-key race by re-pushing onto the existing cart doc', async () => {
+    const existing = line({ product_id: 'prod_0061', name: 'Classic Nonstick Fry Pan 12oz' });
+    const { db, calls } = stubDb(PRODUCTS, PROMOTIONS, { raceOnUpsert: existing });
+    const turnProductIds = new Set(['prod_0021', 'prod_0061']);
+    const { cartAdd } = buildCartTools({ db, ...key, turnProductIds });
+    const res: any = await cartAdd.execute!({ line: { product_id: 'prod_0021', qty: 1 } } as any, {} as any);
+    expect(res.ok).toBe(true);                                   // the add still succeeds
+    // The retry is a non-upsert $push (the doc already exists after the racing insert).
+    const retry = calls.filter(c => c.op === 'updateOne' && c.update?.$push?.lines).slice(-1)[0];
+    expect(retry.options?.upsert).toBeFalsy();
+    // Exactly one cart doc, holding BOTH the racing sibling's line and ours (no split doc).
+    const cart: any = await buildCartTools({ db, ...key }).cartRead.execute!({} as any, {} as any);
+    const ids = cart.lines.map((l: CartLine) => l.product_id).sort();
+    expect(ids).toEqual(['prod_0021', 'prod_0061']);
+  });
+});
+
+// provisionCartIndex is the authoritative guard against the split-cart bug: it dedupes any
+// existing multi-doc keys (a unique index can't be created while duplicates exist) then creates
+// the unique {userId,threadId} index. These tests pin the merge math and the migration steps.
+describe('mergeCartLines', () => {
+  it('unions lines by product_id and sums qty for repeats', () => {
+    const merged = mergeCartLines([
+      [line({ product_id: 'a', qty: 1 }), line({ product_id: 'b', qty: 2 })],
+      [line({ product_id: 'a', qty: 3 }), line({ product_id: 'c', qty: 1 })],
+    ]);
+    const byId = Object.fromEntries(merged.map(l => [l.product_id, l.qty]));
+    expect(byId).toEqual({ a: 4, b: 2, c: 1 });
+  });
+
+  it('tolerates empty / missing line arrays', () => {
+    expect(mergeCartLines([])).toEqual([]);
+    expect(mergeCartLines([[], [line({ product_id: 'a', qty: 1 })]])).toHaveLength(1);
+  });
+});
+
+describe('provisionCartIndex', () => {
+  /** In-memory carts collection tracking aggregate/find/update/delete + createIndex. */
+  function cartsDb(seed: any[]) {
+    let docs = seed.map((d, i) => ({ _id: `c${i}`, ...d }));
+    const created: any[] = [];
+    const match = (d: any, q: any) => {
+      if (q._id?.$in) return q._id.$in.includes(d._id);
+      return Object.entries(q).every(([k, v]) => d[k] === v);
+    };
+    const carts = {
+      aggregate: (_pipeline: any) => ({
+        toArray: async () => {
+          const groups = new Map<string, { _id: any; count: number }>();
+          for (const d of docs) {
+            const key = `${d.userId} ${d.threadId}`;
+            const g = groups.get(key) ?? { _id: { userId: d.userId, threadId: d.threadId }, count: 0 };
+            g.count++; groups.set(key, g);
+          }
+          return [...groups.values()].filter(g => g.count > 1);
+        },
+      }),
+      find: (q: any) => ({ toArray: async () => docs.filter(d => match(d, q)) }),
+      updateOne: async (q: any, update: any) => {
+        const d = docs.find(x => match(x, q));
+        if (d && update.$set) Object.assign(d, update.$set);
+        return { modifiedCount: d ? 1 : 0 };
+      },
+      deleteMany: async (q: any) => {
+        const before = docs.length;
+        docs = docs.filter(d => !match(d, q));
+        return { deletedCount: before - docs.length };
+      },
+      createIndex: async (spec: any, opts: any) => { created.push({ spec, opts }); return 'idx'; },
+    };
+    const db = { collection: () => carts } as any;
+    return { db, getDocs: () => docs, created };
+  }
+
+  it('merges duplicate {userId,threadId} docs into the newest, deletes the rest, then creates a unique index', async () => {
+    const { db, getDocs, created } = cartsDb([
+      { userId: 'demo', threadId: 't', lines: [line({ product_id: 'a', qty: 1 })], updated_at: new Date('2026-01-01T00:00:00Z') },
+      { userId: 'demo', threadId: 't', lines: [line({ product_id: 'b', qty: 1 })], updated_at: new Date('2026-01-02T00:00:00Z') }, // newest → survivor
+      { userId: 'other', threadId: 't', lines: [line({ product_id: 'z', qty: 1 })], updated_at: new Date('2026-01-01T00:00:00Z') },
+    ]);
+    await provisionCartIndex(db);
+    const docs = getDocs();
+    // demo/t collapsed to ONE doc holding both lines; other/t untouched.
+    const demo = docs.filter(d => d.userId === 'demo' && d.threadId === 't');
+    expect(demo).toHaveLength(1);
+    expect(demo[0].lines.map((l: CartLine) => l.product_id).sort()).toEqual(['a', 'b']);
+    expect(docs.filter(d => d.userId === 'other')).toHaveLength(1);
+    // The unique index was created with the documented name.
+    expect(created).toHaveLength(1);
+    expect(created[0].spec).toEqual({ userId: 1, threadId: 1 });
+    expect(created[0].opts).toMatchObject({ unique: true });
+  });
+
+  it('creates the unique index even when there are no duplicates to merge', async () => {
+    const { db, created } = cartsDb([{ userId: 'demo', threadId: 't', lines: [], updated_at: new Date() }]);
+    await provisionCartIndex(db);
+    expect(created).toHaveLength(1);
+    expect(created[0].opts).toMatchObject({ unique: true });
   });
 });
 

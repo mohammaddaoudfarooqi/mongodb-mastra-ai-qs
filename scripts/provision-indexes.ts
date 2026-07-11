@@ -4,6 +4,7 @@ import { logger } from '../src/observability/logger';
 import { createKnowledgeVector, provisionKnowledgeIndex } from '../src/mastra/vector';
 import { SemanticResponseCache } from '../src/cache/semantic-response-cache';
 import { getQueryEmbedder } from '../src/mastra/embed';
+import { provisionCartIndex } from '../src/mastra/tools/cart';
 
 async function main() {
   try { process.loadEnvFile(); } catch { /* .env optional */ }
@@ -23,6 +24,10 @@ async function main() {
       cfg: cfg.responseCache,
     });
     await cache.provision();
+
+    logger.info('provisioning carts unique {userId, threadId} index (dedupes first)');
+    await provisionCartIndex(client.db(cfg.mongoDb));
+
     logger.info('provision complete');
   } finally {
     await client.close();
