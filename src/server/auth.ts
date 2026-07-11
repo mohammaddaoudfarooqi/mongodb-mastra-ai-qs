@@ -91,3 +91,24 @@ export async function resolveUserId(
   if (cfg.authRequired) return { unauthorized: true };
   return { userId: clientUserId || cfg.defaultUserId };
 }
+
+/**
+ * Bind a per-conversation thread id to its owning user, so the two deploy modes agree on what
+ * a `threadId` means and the checkout resume ownership check can enforce it.
+ *
+ * The problem: the client sends a bare per-conversation `sub` as `thread_id`. In SSO mode the
+ * resume handler binds a resume to the caller by requiring `threadId === userId` or
+ * `threadId.startsWith(`${userId}:`)` — which a bare sub fails, so a legitimate approve is
+ * rejected 403. Namespacing the thread by user in SSO mode makes the composite key satisfy that
+ * contract (and doubles as a defense against one user resuming another's suspended checkout).
+ *
+ * Local demo mode returns the bare sub UNCHANGED: there is no trusted identity, and the demo
+ * deliberately lets you switch users against the same thread to show cross-thread memory.
+ * Idempotent — an already-scoped id (echoed back from an interrupt frame, or a restored thread)
+ * is returned as-is, never double-prefixed.
+ */
+export function scopeThreadId(cfg: Config, userId: string, sub: string | undefined): string {
+  if (!cfg.authRequired) return sub || `${userId}:default`;
+  if (!sub) return `${userId}:default`;
+  return sub === userId || sub.startsWith(`${userId}:`) ? sub : `${userId}:${sub}`;
+}

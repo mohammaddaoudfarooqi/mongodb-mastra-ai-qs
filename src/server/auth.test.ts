@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import type { Context } from 'hono';
 import type { Config } from '../config';
-import { resolveUserId, registerAuthenticator, resetAuthenticator, getAuthenticator } from './auth';
+import { resolveUserId, scopeThreadId, registerAuthenticator, resetAuthenticator, getAuthenticator } from './auth';
 
 const localCfg = { defaultUserId: 'demo', authRequired: false } as Config;
 const ssoCfg = { defaultUserId: 'demo', authRequired: true } as Config;
@@ -32,6 +32,33 @@ describe('resolveUserId', () => {
   it('a registered authenticator also wins in local mode (client value ignored)', async () => {
     registerAuthenticator(async () => ({ userId: 'sso-user' }));
     expect(await resolveUserId(ctx, localCfg, 'alice')).toEqual({ userId: 'sso-user' });
+  });
+});
+
+// scopeThreadId binds a per-conversation thread to its owning user in SSO mode so the resume
+// ownership check (threadId === userId || startsWith(`${userId}:`)) holds for a checkout started
+// with a bare client sub. Local mode is unchanged (bare sub) so the demo's cross-user switching
+// still works. Idempotent so an already-composite id (echoed from an interrupt, or a restored
+// thread) is not double-prefixed.
+describe('scopeThreadId', () => {
+  it('local mode: returns the client sub unchanged', () => {
+    expect(scopeThreadId(localCfg, 'alice', 'abc123')).toBe('abc123');
+  });
+
+  it('sso mode: prefixes the sub with the owning user so resume ownership holds', () => {
+    const scoped = scopeThreadId(ssoCfg, 'real-user@corp', 'abc123');
+    expect(scoped).toBe('real-user@corp:abc123');
+    // Satisfies the resume ownership contract in routes.ts.
+    expect(scoped === 'real-user@corp' || scoped.startsWith('real-user@corp:')).toBe(true);
+  });
+
+  it('sso mode: is idempotent for an already-scoped thread id (no double prefix)', () => {
+    expect(scopeThreadId(ssoCfg, 'real-user@corp', 'real-user@corp:abc123')).toBe('real-user@corp:abc123');
+  });
+
+  it('falls back to a per-user default thread when no sub is supplied', () => {
+    expect(scopeThreadId(ssoCfg, 'real-user@corp', undefined)).toBe('real-user@corp:default');
+    expect(scopeThreadId(localCfg, 'alice', undefined)).toBe('alice:default');
   });
 });
 

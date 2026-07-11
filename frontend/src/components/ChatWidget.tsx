@@ -318,22 +318,34 @@ function CartSection({ cart }: { cart: CartResponse | null }) {
 }
 
 /* ── Checkout approval (HITL) ──────────────────────────────────────────── */
-/** Rendered when the order workflow suspends for approval. Reads the pending
- *  interrupt and drives approve/reject via the ChatContext resume flow. */
-function ApprovalCard({
+/** Rendered when the order workflow suspends for approval. The buttons are driven by the
+ *  interrupt's `allowed_decisions` (server contract) rather than hardcoded, so an `edit`
+ *  decision is actually exposed when the workflow offers it. `edit` forwards the interrupt's
+ *  own action (name + args) to onEdit. Falls back to approve/reject when the list is empty so
+ *  the user is never stranded without a way to resolve the card. Exported for unit testing. */
+export function ApprovalCard({
   interrupt,
   disabled,
   onApprove,
   onReject,
+  onEdit,
 }: {
   interrupt: InterruptEvent;
   disabled: boolean;
   onApprove: () => void;
   onReject: () => void;
+  onEdit: (action: { name: string; args: Record<string, unknown> }) => void;
 }) {
   const args = interrupt.action?.args as { total_usd?: number; lines?: unknown[] } | undefined;
   const total = typeof args?.total_usd === 'number' ? args.total_usd : undefined;
   const itemCount = Array.isArray(args?.lines) ? args!.lines!.length : undefined;
+
+  // Which actions to offer, from the server's allowed_decisions. Fall back to approve+reject
+  // when the list is absent/empty so the card always has a way to be resolved.
+  const allowed = interrupt.allowed_decisions?.length
+    ? interrupt.allowed_decisions
+    : ['approve', 'reject'];
+  const can = (d: string) => allowed.includes(d);
 
   const btn = (bg: string, border: string, color: string): React.CSSProperties => ({
     flex: 1,
@@ -376,22 +388,36 @@ function ApprovalCard({
           }.`}
       </div>
       <div style={{ display: 'flex', gap: 8 }}>
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={onApprove}
-          style={btn('var(--green-tint)', 'var(--green-border)', 'var(--spring-green)')}
-        >
-          Approve
-        </button>
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={onReject}
-          style={btn('rgba(255,255,255,0.03)', 'var(--border)', 'var(--text-secondary)')}
-        >
-          Reject
-        </button>
+        {can('approve') && (
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={onApprove}
+            style={btn('var(--green-tint)', 'var(--green-border)', 'var(--spring-green)')}
+          >
+            Approve
+          </button>
+        )}
+        {can('edit') && (
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => onEdit({ name: interrupt.action.name, args: interrupt.action.args })}
+            style={btn('rgba(255,255,255,0.03)', 'var(--border-strong)', 'var(--text)')}
+          >
+            Edit
+          </button>
+        )}
+        {can('reject') && (
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={onReject}
+            style={btn('rgba(255,255,255,0.03)', 'var(--border)', 'var(--text-secondary)')}
+          >
+            Reject
+          </button>
+        )}
       </div>
     </div>
   );
@@ -408,6 +434,7 @@ function Panel() {
     userId,
     pendingInterrupt,
     approveCheckout,
+    editCheckout,
     rejectCheckout,
     sendMessage,
     newConversation,
@@ -637,6 +664,7 @@ function Panel() {
           interrupt={pendingInterrupt}
           disabled={isLoading}
           onApprove={approveCheckout}
+          onEdit={editCheckout}
           onReject={() => rejectCheckout()}
         />
       )}

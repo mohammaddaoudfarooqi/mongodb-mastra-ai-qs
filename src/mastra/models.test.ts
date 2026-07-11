@@ -23,7 +23,7 @@ vi.mock('@aws-sdk/credential-providers', () => ({
 }));
 
 import { createAmazonBedrock } from '@ai-sdk/amazon-bedrock';
-import { maxTokensFor, temperatureFor, modelChoices, getLLM, MODEL_CATALOG, BEDROCK_MODEL_CATALOG } from './models';
+import { maxTokensFor, temperatureFor, modelChoices, resolveModel, getLLM, MODEL_CATALOG, BEDROCK_MODEL_CATALOG } from './models';
 import type { Config } from '../config';
 
 describe('model helpers', () => {
@@ -74,6 +74,40 @@ describe('modelChoices (GET /models catalog)', () => {
   it('keeps the Anthropic catalog for the default (non-bedrock) provider', () => {
     expect(modelChoices('claude-sonnet-4-6', 'anthropic').map(c => c.id))
       .toEqual(MODEL_CATALOG.map(m => m.id));
+  });
+});
+
+// resolveModel is the SERVER-SIDE enforcement of the model-switch lock. The UI hiding the
+// picker is not enough: a client can POST /chat with any `model`. When switching is locked
+// the requested model is IGNORED (always the pinned default); when unlocked, only a model in
+// the provider's catalog is honored, and anything else falls back to the default.
+describe('resolveModel (server-side model-switch lock)', () => {
+  const base = { llmModel: 'claude-sonnet-4-6', llmProvider: 'anthropic', allowModelSwitch: true } as unknown as Config;
+
+  it('ignores the requested model and pins the default when switching is locked', () => {
+    const cfg = { ...base, allowModelSwitch: false } as Config;
+    expect(resolveModel(cfg, 'claude-opus-4-8')).toBe('claude-sonnet-4-6');
+    expect(resolveModel(cfg, 'anything-at-all')).toBe('claude-sonnet-4-6');
+  });
+
+  it('honors a requested model that is in the catalog when switching is allowed', () => {
+    expect(resolveModel(base, 'claude-haiku-4-5')).toBe('claude-haiku-4-5');
+  });
+
+  it('falls back to the default for an unknown/off-catalog model even when unlocked', () => {
+    expect(resolveModel(base, 'gpt-9-turbo-jailbreak')).toBe('claude-sonnet-4-6');
+  });
+
+  it('uses the default when no model is requested', () => {
+    expect(resolveModel(base, undefined)).toBe('claude-sonnet-4-6');
+  });
+
+  it('validates against the Bedrock catalog when the provider is bedrock', () => {
+    const cfg = { llmModel: BEDROCK_MODEL_CATALOG[0].id, llmProvider: 'bedrock', allowModelSwitch: true } as unknown as Config;
+    // A plain Anthropic id is off-catalog for bedrock → falls back to the default profile id.
+    expect(resolveModel(cfg, 'claude-haiku-4-5')).toBe(BEDROCK_MODEL_CATALOG[0].id);
+    // A real bedrock profile id is honored.
+    expect(resolveModel(cfg, BEDROCK_MODEL_CATALOG[1].id)).toBe(BEDROCK_MODEL_CATALOG[1].id);
   });
 });
 

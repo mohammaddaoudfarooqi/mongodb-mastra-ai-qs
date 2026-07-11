@@ -6,7 +6,7 @@ import { logger, setLogSink } from '../observability/logger';
 import { createMongoLogSink } from '../observability/mongo-log-sink';
 import { toCartsmithFrames, serializeFrame, field, capTraceStep, type StreamPart } from './sse';
 import { TraceSink } from './trace';
-import { takeRateLimit } from './rate-limit';
+import { takeRateLimit, rateLimitKey } from './rate-limit';
 import { isOverBudget, BUDGET_TRIPPED_MESSAGE } from './budget';
 import { buildLeadDoc, type LeadInput } from './leads';
 import { projectMessage } from './projection';
@@ -15,9 +15,9 @@ import { computeCartTotals, type CartLine } from '../mastra/tools/cart';
 import { SemanticResponseCache } from '../cache/semantic-response-cache';
 import { isReadEligible, isWriteEligible, isHedge } from '../cache/cache-decisions';
 import { getQueryEmbedder } from '../mastra/embed';
-import { maxTokensFor, temperatureFor, modelChoices } from '../mastra/models';
+import { maxTokensFor, temperatureFor, modelChoices, resolveModel } from '../mastra/models';
 import { buildFeedbackDoc, type FeedbackRequest } from './feedback';
-import { resolveUserId, getAuthenticator } from './auth';
+import { resolveUserId, scopeThreadId, getAuthenticator } from './auth';
 
 function freshSignals(): TurnContext['signals'] {
   return { knowledgeSearchRan: false, knowledgeSearchHadResults: false, dataQueryRan: false, mutatingToolRan: false };
@@ -142,11 +142,19 @@ export const handlers = {
     const who = await resolveUserId(c, cfg, body.user_id);
     if ('unauthorized' in who) return c.json({ detail: 'authentication required' }, 401);
     const userId = who.userId;
-    const threadId = body.thread_id || `${userId}:default`;
-    const model = body.model || cfg.llmModel;
+    // Bind the thread to the owning user (SSO mode) so the composite key is consistent across
+    // chat/cart/messages AND the checkout resume ownership check holds for this thread. Local
+    // mode leaves the bare client sub unchanged (finding #2 — SSO resume rejected a bare sub).
+    const threadId = scopeThreadId(cfg, userId, body.thread_id);
+    // Enforce the model-switch lock SERVER-SIDE: when switching is disabled the requested
+    // model is ignored (pinned default), and when enabled only a catalog model is honored.
+    // The UI hiding the picker is not a control — a client can POST any `model` (finding #3).
+    const model = resolveModel(cfg, body.model);
     const correlationId = rc.nextCorrelationId();
     const traceSink = new TraceSink();
-    const turn: TurnContext = { signals: freshSignals(), modelOverride: body.model, userId, threadId, message, trace: traceSink };
+    // modelOverride drives the agent's LLM; use the RESOLVED model (not the raw request) so
+    // the lock/validation applies to the actual agent invocation, not just token/temp lookups.
+    const turn: TurnContext = { signals: freshSignals(), modelOverride: model, userId, threadId, message, trace: traceSink };
     const deps = rc.getSharedDeps();
     const { agent, memory } = (rc.buildAgent ?? buildConcierge)(cfg, turn, deps);
 
@@ -163,9 +171,16 @@ export const handlers = {
       // public AI4 domain so a QR-code burst can't exhaust the box or the Bedrock quota. Emits a
       // graceful token + clean `done` (not an error) so the UI shows a friendly message.
       if (cfg.rateLimit?.enabled) {
-        const rl = await takeRateLimit(rc.db, cfg.rateLimit, threadId);
+        // Key on the SERVER-TRUSTED userId + client IP, NOT the client-supplied thread_id — a
+        // caller could otherwise rotate thread_id per request to reset the counter (finding).
+        // The IP comes from the proxy header nginx/the gateway sets (x-forwarded-for's first
+        // hop, else x-real-ip), never from the request body.
+        const fwd = c.req.header('x-forwarded-for');
+        const ip = (fwd ? fwd.split(',')[0] : c.req.header('x-real-ip'))?.trim();
+        const rlKey = rateLimitKey(userId, ip);
+        const rl = await takeRateLimit(rc.db, cfg.rateLimit, rlKey);
         if (!rl.allowed) {
-          logger.warn('rate limit hit', { threadId, count: rl.count, limit: rl.limit, correlationId });
+          logger.warn('rate limit hit', { rlKey, count: rl.count, limit: rl.limit, correlationId });
           await honoStream.write(serializeFrame('token', "You're sending messages quickly — please pause a moment and try again shortly. Thanks for exploring the demo!"));
           await honoStream.write(serializeFrame('done', ''));
           return;
@@ -330,6 +345,10 @@ export const handlers = {
   // collection in Atlas (best-effort, fail-open: a DB blip returns ok so the gate never traps a
   // visitor). Only meaningful when the lead gate is enabled; otherwise returns ok as a no-op.
   leads: (rc: RouteContext) => async (c: Context): Promise<Response> => {
+    // The lead-capture endpoint is only active on the public AI4 domain (lead gate on).
+    // When the gate is disabled it must be a hard no-op — do NOT validate or persist anything,
+    // or a self-deploy silently accumulates lead docs it never intended to collect (finding).
+    if (!rc.cfg.leadGate?.enabled) return c.json({ ok: false, reason: 'lead capture is not enabled' }, 404);
     let body: LeadInput;
     try { body = await c.req.json(); } catch { return c.json({ ok: false, reason: 'invalid JSON body' }, 400); }
     const built = buildLeadDoc(body, new Date(), c.req.header('user-agent') ?? '');
@@ -383,7 +402,8 @@ export const handlers = {
     const who = await resolveUserId(c, rc.cfg, c.req.query('user_id'));
     if ('unauthorized' in who) return c.json({ detail: 'authentication required' }, 401);
     const userId = who.userId;
-    const threadId = c.req.query('thread_id') || `${userId}:default`;
+    // Same user-scoping as /chat so the cart panel reads the SAME composite key the agent wrote.
+    const threadId = scopeThreadId(rc.cfg, userId, c.req.query('thread_id') || undefined);
     try {
       const doc = await rc.db.collection('carts').findOne({ userId, threadId });
       const lines = (doc?.lines ?? []) as CartLine[];
@@ -395,8 +415,10 @@ export const handlers = {
     const who = await resolveUserId(c, rc.cfg, c.req.query('user_id'));
     if ('unauthorized' in who) return c.json({ detail: 'authentication required' }, 401);
     const userId = who.userId;
-    const threadId = c.req.query('thread_id');
-    if (!threadId) return c.json({ messages: [] });
+    const rawThreadId = c.req.query('thread_id');
+    if (!rawThreadId) return c.json({ messages: [] });
+    // Recall the SAME composite key /chat persisted under (SSO scopes by user; local unchanged).
+    const threadId = scopeThreadId(rc.cfg, userId, rawThreadId);
     try {
       const deps = rc.getSharedDeps();
       const res = await deps.memory.recall({ threadId, resourceId: userId });

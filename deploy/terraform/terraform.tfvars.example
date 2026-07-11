@@ -49,6 +49,23 @@ bedrock_model_id   = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 memory_semantic_recall = "false"
 memory_last_messages   = "10"
 
+# ── Public-demo hardening ─────────────────────────────────────────────────────
+# Defaults below match a plain self-deploy (unhardened, model switching on). For the PUBLIC,
+# QR-code-behind-a-URL AI4 domain, flip these to lock the model, throttle bursts, arm the budget
+# kill-switch, enable attendee capture, and show only cache-safe presets:
+#   allow_model_switch = "false"
+#   rate_limit_enabled = "true"   # rate_limit_max / rate_limit_window_seconds tune the window
+#   budget_enabled     = "true"
+#   lead_gate_enabled  = "true"
+#   curated_presets    = "true"
+allow_model_switch        = "true"
+rate_limit_enabled        = "false"
+rate_limit_max            = "40"
+rate_limit_window_seconds = "3600"
+budget_enabled            = "false"
+lead_gate_enabled         = "false"
+curated_presets           = "false"
+
 # ── Build / instance ──────────────────────────────────────────────────────────
 app_repo_url    = "https://github.com/mohammaddaoudfarooqi/mongodb-mastra-ai-qs.git"
 app_repo_ref    = "main"

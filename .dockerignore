@@ -12,3 +12,16 @@ specs
 tests
 **/*.test.ts
 .DS_Store
+# Terraform state / vars / plans and generated deploy secrets. These live under deploy/ and are
+# secret or environment-specific (deploy/.gitignore marks them so); the app image never needs
+# them, and COPY . . would otherwise pull them into the build context. Keep them OUT.
+**/*.tfstate
+**/*.tfstate.*
+**/*.tfvars
+!**/*.tfvars.example
+**/.terraform
+**/.terraform.lock.hcl
+**/tfplan
+**/*.pem
+deploy/.deploy-secrets.env
+deploy/**/deploy.log

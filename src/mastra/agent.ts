@@ -205,6 +205,9 @@ export function buildConcierge(cfg: Config, turn: TurnContext, deps?: ConciergeD
   const turnProductIds = new Set<string>();
   const dataQuery = buildDataQueryTool({
     db, allowList: cfg.dataAgentAllowList, limit: cfg.dataAgentLimit,
+    // Server-trusted identity so per-user collections (orders) are scoped to THIS shopper
+    // and the agent can't read another user's orders no matter what filter the model builds.
+    userId: turn.userId ?? cfg.defaultUserId,
     onSignals: () => { turn.signals.dataQueryRan = true; },
     onProductsFound: ids => { for (const id of ids) turnProductIds.add(id); },
     onTrace: step => turn.trace?.push(step),

@@ -293,6 +293,27 @@ export function buildCartTools(args: {
             `with that exact _id.`,
         };
       }
+      // Merge `line`'s qty into an already-present cart line, recomputing qty-derived money.
+      // line_savings (sale) and coupon_savings both scale with qty; a plain $inc-qty would leave
+      // them frozen at the first add's qty, so the cart under-reports savings for the higher
+      // quantity (reviewer finding). Recompute sale savings from the resolved prices and scale
+      // the existing coupon proportionally so an applied code keeps discounting the full qty.
+      // Deterministic math, never model arithmetic (mirrors applyCoupon's whole-line rewrite).
+      const bumpQty = async (currentLines: CartLine[], already: CartLine) => {
+        const newQty = already.qty + line.qty;
+        const round2 = (n: number) => Math.round(n * 100) / 100;
+        const perUnitSale = line.sale_price_usd !== null ? line.unit_price_usd - line.sale_price_usd : 0;
+        const merged: CartLine = {
+          ...already,
+          qty: newQty,
+          line_savings: round2(perUnitSale * newQty),
+          coupon_savings: already.qty > 0 ? round2((already.coupon_savings ?? 0) / already.qty * newQty) : 0,
+        };
+        const nextLines = currentLines.map(l => (l.product_id === line.product_id ? merged : l));
+        await carts.updateOne(key, { $set: { lines: nextLines, updated_at: new Date() } });
+        return merged;
+      };
+
       // Idempotent re-add: if this product is already a cart line, bump its qty instead of
       // pushing a duplicate. Fixes the model calling cartAdd twice for the same item.
       const existing = await carts.findOne(key);
@@ -300,11 +321,7 @@ export function buildCartTools(args: {
       if (already) {
         args.onMutate?.();
         addedThisTurn.add(line.product_id);
-        await carts.updateOne(
-          { ...key, 'lines.product_id': line.product_id },
-          { $inc: { 'lines.$.qty': line.qty }, $set: { updated_at: new Date() } },
-        );
-        return { ok: true, line: { ...already, qty: already.qty + line.qty } };
+        return { ok: true, line: await bumpQty((existing?.lines ?? []) as CartLine[], already) };
       }
       // Per-turn distinct-add cap: refuse a 2nd distinct product in one turn unless the
       // tools were built to allow several. Blocks the spurious multi-add that balloons the
@@ -330,11 +347,16 @@ export function buildCartTools(args: {
       } catch (err) {
         // Concurrent bulk-add race: under the unique {userId,threadId} index, a sibling cartAdd
         // won the insert race and materialized the doc after our findOne saw nothing, so our own
-        // upsert insert is rejected with E11000. The doc now EXISTS, so retry as a plain $push
-        // (no upsert) to land this line in the ONE cart doc — never a second split document that
-        // checkout's single findOne/deleteOne would quote/clear only partially (the "1 item
+        // upsert insert is rejected with E11000. Re-read the now-existing doc and either bump the
+        // qty (if the sibling added the SAME product — a blind re-push would create a DUPLICATE
+        // line the unique index can't prevent, since it guards documents not products within
+        // `lines`) or $push our new product onto the ONE cart doc — never a second split document
+        // that checkout's single findOne/deleteOne would quote/clear only partially (the "1 item
         // survives after checkout" bug). See scripts/provision-indexes.ts for the index.
         if (!isDuplicateKeyError(err)) throw err;
+        const after = await carts.findOne(key);
+        const raced = (after?.lines ?? []).find(l => l.product_id === line.product_id);
+        if (raced) return { ok: true, line: await bumpQty((after?.lines ?? []) as CartLine[], raced) };
         await carts.updateOne(
           key,
           { $push: { lines: line }, $set: { updated_at: new Date() } },

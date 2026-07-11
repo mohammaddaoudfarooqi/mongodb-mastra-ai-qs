@@ -72,6 +72,43 @@ describe('handlers.models (REQ-E-070: model-switch lock)', () => {
   });
 });
 
+describe('handlers.leads (lead-gate enablement)', () => {
+  const validLead = { name: 'Ada', email: 'ada@example.com', consent: true };
+
+  it('does NOT write and returns a no-op when the lead gate is disabled', async () => {
+    let inserted = false;
+    const rc = stubRc({
+      cfg: { ...cfg, leadGate: { enabled: false, collection: 'leads' } } as Config,
+      db: { collection: () => ({ insertOne: async () => { inserted = true; return {}; } }) } as unknown as Db,
+    });
+    const app = new Hono();
+    app.post('/leads', handlers.leads(rc));
+    const res = await app.request('/leads', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(validLead),
+    });
+    expect(res.status).toBe(404);
+    expect(inserted).toBe(false); // never touched the collection
+  });
+
+  it('writes the lead when the gate is enabled', async () => {
+    let inserted = false;
+    const rc = stubRc({
+      cfg: { ...cfg, leadGate: { enabled: true, collection: 'leads' } } as Config,
+      db: { collection: () => ({ insertOne: async () => { inserted = true; return {}; } }) } as unknown as Db,
+    });
+    const app = new Hono();
+    app.post('/leads', handlers.leads(rc));
+    const res = await app.request('/leads', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(validLead),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(inserted).toBe(true);
+  });
+});
+
 describe('handlers.cart (REQ-E-001 / INV-003: shape via the shared handler)', () => {
   function appWithCart(doc: any) {
     const rc = stubRc({
@@ -137,6 +174,40 @@ describe('handlers.chat (REQ-E-004 / boundary #3: SSE streams incrementally)', (
       });
       expect(res.status).toBe(400);
     }
+  });
+
+  // Server-side model lock (finding #3): the UI hides the picker when locked, but a client can
+  // still POST any `model`. The handler must run the pinned default regardless.
+  it('ignores body.model and runs the pinned default when switching is locked', async () => {
+    let seenModel: string | undefined;
+    const rc = stubRc({
+      cfg: { ...cfg, llmModel: 'claude-sonnet-4-6', allowModelSwitch: false, responseCache: { ...cfg.responseCache, enabled: false } } as Config,
+      getSharedDeps: () => ({} as any),
+      buildAgent: (_c: Config, turn: any) => { seenModel = turn.modelOverride; return { agent: fakeAgent, memory: fakeMemory }; },
+    });
+    const app = new Hono();
+    app.post('/chat', handlers.chat(rc));
+    await app.request('/chat', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: 'hi', user_id: 'demo', thread_id: 't1', model: 'claude-opus-4-8' }),
+    });
+    expect(seenModel).toBe('claude-sonnet-4-6'); // requested opus ignored; pinned default used
+  });
+
+  it('honors a catalog body.model when switching is allowed', async () => {
+    let seenModel: string | undefined;
+    const rc = stubRc({
+      cfg: { ...cfg, llmModel: 'claude-sonnet-4-6', allowModelSwitch: true, responseCache: { ...cfg.responseCache, enabled: false } } as Config,
+      getSharedDeps: () => ({} as any),
+      buildAgent: (_c: Config, turn: any) => { seenModel = turn.modelOverride; return { agent: fakeAgent, memory: fakeMemory }; },
+    });
+    const app = new Hono();
+    app.post('/chat', handlers.chat(rc));
+    await app.request('/chat', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: 'hi', user_id: 'demo', thread_id: 't1', model: 'claude-haiku-4-5' }),
+    });
+    expect(seenModel).toBe('claude-haiku-4-5');
   });
 
   it('streams correlation → token(s) → done as SSE frames', async () => {
@@ -405,6 +476,43 @@ describe('auth enforcement on identity-bearing routes (reviewer finding #1)', ()
     });
     expect(res.status).toBe(204);
     expect(writes[0].user_id).toBe('real@corp'); // not "attacker"
+  });
+
+  // Finding #2: in SSO mode a checkout started with a bare client sub must produce an interrupt
+  // whose thread_id is USER-SCOPED, so the subsequent resume ownership check (threadId ===
+  // userId || startsWith(`${userId}:`)) passes. Before the fix the bare sub failed that check
+  // and a legitimate approve was rejected 403.
+  it('SSO mode: /chat scopes the thread so the interrupt thread_id passes the resume ownership check', async () => {
+    registerAuthenticator(() => ({ userId: 'real@corp' }));
+    async function* fs() { yield { type: 'text-delta', text: 'ok' } as any; yield { type: 'finish' } as any; }
+    const rc = stubRc({
+      cfg: { ...cfg, authMode: 'sso', authRequired: true, responseCache: { ...cfg.responseCache, enabled: false } } as Config,
+      getSharedDeps: () => ({} as any),
+      buildAgent: (_c: Config, turn: any) => ({
+        agent: { stream: async () => { turn.checkoutRequested = true; return { fullStream: fs() }; } },
+        memory: { recall: async () => ({ messages: [] }), saveMessages: async () => {} },
+      }),
+      orderRunner: {
+        start: async (threadId: string) => ({ status: 'suspended', suspendPayload: {
+          action: { name: 'place_order', args: { thread_id: threadId }, description: 'Place order' },
+          allowed_decisions: ['approve', 'edit', 'reject'],
+        } }),
+        resume: async () => ({ status: 'placed', message: 'done' }),
+      },
+    });
+    const app = new Hono();
+    app.post('/chat', handlers.chat(rc));
+    const res = await app.request('/chat', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      // The client sends a BARE sub as thread_id (as the SPA does).
+      body: JSON.stringify({ message: 'check out', user_id: 'ignored', thread_id: 'abc123' }),
+    });
+    const text = await res.text();
+    // The interrupt echoes the SCOPED thread_id, which satisfies the resume ownership contract.
+    expect(text).toContain('"thread_id":"real@corp:abc123"');
+    const scoped: string = 'real@corp:abc123';
+    const userId = 'real@corp';
+    expect(scoped === userId || scoped.startsWith(`${userId}:`)).toBe(true);
   });
 });
 

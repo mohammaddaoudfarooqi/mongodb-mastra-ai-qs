@@ -84,6 +84,16 @@ locals {
     APP_LOG_MONGO_ENABLED               = var.app_log_mongo_enabled
     APP_LOG_COLLECTION                  = var.app_log_collection
     APP_LOG_RETENTION_DAYS              = var.app_log_retention_days
+    # Public-demo hardening controls — surfaced so a deploy comes up with the intended posture
+    # (defaults match config.ts, so a plain self-deploy is unchanged; the public domain flips
+    # these via tfvars). Reviewer finding: these never reached SSM, so the box ignored them.
+    ALLOW_MODEL_SWITCH        = var.allow_model_switch
+    RATE_LIMIT_ENABLED        = var.rate_limit_enabled
+    RATE_LIMIT_MAX            = var.rate_limit_max
+    RATE_LIMIT_WINDOW_SECONDS = var.rate_limit_window_seconds
+    BUDGET_ENABLED            = var.budget_enabled
+    LEAD_GATE_ENABLED         = var.lead_gate_enabled
+    CURATED_PRESETS           = var.curated_presets
   }
 
   # Secret env → SSM SecureString params.

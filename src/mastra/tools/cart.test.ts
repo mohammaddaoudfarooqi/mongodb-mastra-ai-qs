@@ -260,6 +260,39 @@ describe('buildCartTools identity binding', () => {
     expect(cart.lines[0].qty).toBe(2);           // qty bumped
   });
 
+  // Qty-derived fields must be recomputed on a re-add: line_savings (sale) and coupon_savings
+  // both scale with qty. The old $inc-qty-only path left them frozen at the first add's qty,
+  // so the cart under-reported savings for the higher quantity (reviewer finding).
+  it('recomputes line_savings when a re-add bumps qty (sale savings scale with qty)', async () => {
+    const { db } = stubDb();
+    const { cartAdd } = buildCartTools({ db, ...key, maxDistinctAddsPerTurn: 3 });
+    // prod_0021 is on sale: 145.99 → 116.79, saving 29.20 per unit.
+    await cartAdd.execute!({ line: { product_id: 'prod_0021', qty: 1 } } as any, {} as any);
+    await cartAdd.execute!({ line: { product_id: 'prod_0021', qty: 1 } } as any, {} as any);
+    const cart: any = await buildCartTools({ db, ...key }).cartRead.execute!({} as any, {} as any);
+    expect(cart.lines[0].qty).toBe(2);
+    // 29.20 × 2 = 58.40 — NOT the stale single-unit 29.20.
+    expect(cart.lines[0].line_savings).toBeCloseTo((145.99 - 116.79) * 2, 2);
+    expect(cart.total_savings).toBeCloseTo((145.99 - 116.79) * 2, 2);
+  });
+
+  it('scales coupon_savings proportionally when a re-add bumps qty', async () => {
+    const { db, setDoc } = stubDb();
+    // Seed a line that already has a coupon: qty 1, coupon_savings 5.84 (5% of 116.79).
+    setDoc({ ...key, lines: [line({
+      product_id: 'prod_0021', name: 'Classic Insulated Water Bottle 8in',
+      unit_price_usd: 145.99, sale_price_usd: 116.79, qty: 1, line_savings: 29.2,
+      applied_coupons: ['SAVE5'], coupon_savings: 5.84,
+    })] });
+    const { cartAdd } = buildCartTools({ db, ...key });
+    await cartAdd.execute!({ line: { product_id: 'prod_0021', qty: 1 } } as any, {} as any);
+    const cart: any = await buildCartTools({ db, ...key }).cartRead.execute!({} as any, {} as any);
+    expect(cart.lines[0].qty).toBe(2);
+    // Coupon savings scale with qty (5.84 → 11.68) and the code stays stamped.
+    expect(cart.lines[0].coupon_savings).toBeCloseTo(11.68, 2);
+    expect(cart.lines[0].applied_coupons).toEqual(['SAVE5']);
+  });
+
   it('refuses a 2nd DISTINCT product in the same turn by default (maxDistinctAddsPerTurn=1)', async () => {
     const { db } = stubDb();
     const { cartAdd } = buildCartTools({ db, ...key });
@@ -340,6 +373,26 @@ describe('buildCartTools identity binding', () => {
     const cart: any = await buildCartTools({ db, ...key }).cartRead.execute!({} as any, {} as any);
     const ids = cart.lines.map((l: CartLine) => l.product_id).sort();
     expect(ids).toEqual(['prod_0021', 'prod_0061']);
+  });
+
+  // Concurrent SAME-product add (finding): the unique {userId,threadId} index guards documents,
+  // not distinct products inside `lines`. When a sibling cartAdd already added the SAME product,
+  // our own upsert insert is rejected E11000 — and a blind re-push would create a DUPLICATE line
+  // for one product. cartAdd must instead detect the product is now present and bump its qty.
+  it('does NOT duplicate a line when a race added the SAME product (bumps qty instead)', async () => {
+    const same = line({
+      product_id: 'prod_0021', name: 'Classic Insulated Water Bottle 8in',
+      qty: 1, unit_price_usd: 145.99, sale_price_usd: 116.79, line_savings: 29.2,
+    });
+    const { db } = stubDb(PRODUCTS, PROMOTIONS, { raceOnUpsert: same });
+    const turnProductIds = new Set(['prod_0021']);
+    const { cartAdd } = buildCartTools({ db, ...key, turnProductIds });
+    const res: any = await cartAdd.execute!({ line: { product_id: 'prod_0021', qty: 1 } } as any, {} as any);
+    expect(res.ok).toBe(true);
+    const cart: any = await buildCartTools({ db, ...key }).cartRead.execute!({} as any, {} as any);
+    expect(cart.lines).toHaveLength(1);          // ONE line, not a duplicate
+    expect(cart.lines[0].qty).toBe(2);           // the racing sibling's qty + ours
+    expect(cart.lines[0].line_savings).toBeCloseTo((145.99 - 116.79) * 2, 2); // savings scale
   });
 });
 

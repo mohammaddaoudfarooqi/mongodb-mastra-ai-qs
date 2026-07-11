@@ -28,6 +28,18 @@ export interface RateLimitResult {
   limit: number;
 }
 
+/**
+ * Build the rate-limit counter key. MUST NOT include anything the caller can rotate to reset
+ * their window: keying on the client-supplied `thread_id` let a shopper mint a fresh thread per
+ * request and bypass the cap entirely. Instead bind the counter to the SERVER-TRUSTED userId
+ * (the SSO identity, or the demo default) plus the client IP — so a new thread does nothing, and
+ * the shared demo user is still partitioned per visitor by IP. `ip` is derived from a proxy
+ * header the app trusts (set by nginx/the platform gateway), never from the request body.
+ */
+export function rateLimitKey(userId: string, ip: string | undefined): string {
+  return `${userId}|${ip && ip.trim() ? ip.trim() : 'unknown'}`;
+}
+
 let indexEnsured = false;
 
 /**

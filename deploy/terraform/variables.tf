@@ -220,6 +220,55 @@ variable "app_port" {
   default = "8000"
 }
 
+# ── Public-demo hardening controls (→ SSM, read by src/config.ts) ─────────────
+# These gate the public AI4 domain's cost/abuse controls. Defaults MATCH config.ts's own
+# defaults, so a plain self-deploy behaves exactly as before; the public domain sets them via
+# tfvars. Without these in SSM the box came up UN-hardened (model switching on, no rate limit,
+# no budget cap, lead gate off) regardless of intent (reviewer finding).
+
+# Whether the storefront may switch the LLM model from the UI. Set "false" on the public domain
+# so every attendee runs the pinned default (cost + consistency); the server also enforces it.
+variable "allow_model_switch" {
+  type    = string
+  default = "true"
+}
+
+# Per-session request rate limit. Turn "true" on the public domain so a QR-code burst can't
+# exhaust the box or the Bedrock quota.
+variable "rate_limit_enabled" {
+  type    = string
+  default = "false"
+}
+variable "rate_limit_max" {
+  type    = string
+  default = "40"
+}
+variable "rate_limit_window_seconds" {
+  type    = string
+  default = "3600"
+}
+
+# Budget kill-switch: when a flag doc is set (e.g. by an AWS Budgets alarm) model calls
+# short-circuit with a graceful message. Enable on the public domain.
+variable "budget_enabled" {
+  type    = string
+  default = "false"
+}
+
+# Attendee lead-capture gate. Enable on the public domain so /api/leads is active and the SPA
+# shows the capture screen; off elsewhere (the endpoint 404s when disabled).
+variable "lead_gate_enabled" {
+  type    = string
+  default = "false"
+}
+
+# Curated preset set: show ONLY the stateless, cache-safe demo prompts (hide stateful
+# cart/checkout/memory presets that can't work on a shared-identity public box).
+variable "curated_presets" {
+  type    = string
+  default = "false"
+}
+
 # ── App logging to MongoDB ────────────────────────────────────────────────────
 # App logs always go to stdout/stderr (Docker json-file on the box); when enabled they are
 # ALSO persisted to a MongoDB collection (buffered, fail-open, TTL-pruned) so logs survive

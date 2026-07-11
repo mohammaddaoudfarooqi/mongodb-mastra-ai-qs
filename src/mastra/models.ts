@@ -75,6 +75,24 @@ export function modelChoices(defaultModel: string, provider?: Config['llmProvide
 }
 
 /**
+ * Resolve the model a /chat turn should actually run, ENFORCING the model-switch lock
+ * server-side. The UI hiding the picker (GET /models) is cosmetic — a client can still POST
+ * /chat with any `model`, so the authoritative decision lives here:
+ *
+ *   - switching locked  (allowModelSwitch=false): the requested model is IGNORED; every turn
+ *     runs the pinned default (cost/consistency control on the public domain).
+ *   - switching allowed (default): a requested model is honored ONLY if it is in the provider's
+ *     catalog (the same list GET /models offers); anything else falls back to the default. This
+ *     stops a client driving the box onto an arbitrary / unauthorized model (e.g. a Bedrock
+ *     inference profile the instance role can't invoke — the Haiku-403 class of failure).
+ */
+export function resolveModel(cfg: Config, requested: string | undefined): string {
+  if (!requested || !cfg.allowModelSwitch) return cfg.llmModel;
+  const allowed = new Set(modelChoices(cfg.llmModel, cfg.llmProvider).map(m => m.id));
+  return allowed.has(requested) ? requested : cfg.llmModel;
+}
+
+/**
  * The @ai-sdk/anthropic client appends `/messages` to baseURL itself, so the
  * configured base must be the API root (…/v1). A LLM_BASE_URL that already ends
  * in `/messages` (as the Grove gateway example does) would otherwise double up.
