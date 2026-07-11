@@ -28,6 +28,74 @@ function planSnapshot(state: PlanState): string {
   return JSON.stringify({ todos: state.todos, updated_at: null });
 }
 
+const DEFAULT_TRACE_MAX_BYTES = 8192;
+const SECRET_KEY_RE = /(api[_-]?key|secret|token|password|authorization|connection[_-]?string|mongodb_uri)/i;
+
+/**
+ * Recursively redact secret-looking fields (by key name) from a trace payload so a
+ * raw args/result peek can never leak a key or connection string into the chat UI.
+ */
+function scrubSecrets(value: any): any {
+  if (Array.isArray(value)) return value.map(scrubSecrets);
+  if (value && typeof value === 'object') {
+    const out: Record<string, any> = {};
+    for (const [k, v] of Object.entries(value)) {
+      out[k] = SECRET_KEY_RE.test(k) ? '[redacted]' : scrubSecrets(v);
+    }
+    return out;
+  }
+  return value;
+}
+
+/**
+ * Bound a trace payload so one oversize tool result (e.g. 25 full product docs) can
+ * neither freeze the client nor blow the frame. If the scrubbed payload serializes
+ * larger than `maxBytes`, replace it with a truncation marker carrying a byte count.
+ */
+function capPayload(value: any, maxBytes: number): any {
+  const scrubbed = scrubSecrets(value);
+  if (scrubbed === undefined) return undefined;
+  const serialized = JSON.stringify(scrubbed);
+  if (serialized !== undefined && serialized.length > maxBytes) {
+    return { __truncated: true, bytes: serialized.length, preview: serialized.slice(0, 512) };
+  }
+  return scrubbed;
+}
+
+/**
+ * Build a fully-capped, scrubbed `trace` frame JSON string from an out-of-band trace step
+ * (see src/server/trace.ts). Used by the /chat handler to emit sub-agent tool steps that
+ * never reach the tool-call/tool-result stream parts. Mirrors the inline trace frames so the
+ * frontend sees one uniform shape.
+ */
+export function capTraceStep(
+  step: { id: string; tool: string; args?: unknown; summary?: string; result?: unknown },
+  maxBytes = DEFAULT_TRACE_MAX_BYTES,
+): string {
+  const hasArgs = step.args !== undefined;
+  return serializeFrame('trace', JSON.stringify({
+    id: step.id,
+    phase: 'end',
+    tool: step.tool,
+    summary: step.summary,
+    ...(hasArgs ? { args: capPayload(step.args, maxBytes) } : {}),
+    result: capPayload(step.result, maxBytes),
+    oob: true,
+  }));
+}
+
+/** Compact human summary of a tool result for the curated trace line. */
+function summarizeResult(tool: string, result: any): string {
+  if (result && typeof result === 'object') {
+    if (Array.isArray((result as any).rows)) return `${(result as any).rows.length} documents`;
+    if (Array.isArray((result as any).hits)) return `${(result as any).hits.length} hits`;
+    if ((result as any).ok === false && typeof (result as any).reason === 'string') return `rejected: ${(result as any).reason}`;
+    if ((result as any).ok === true) return 'ok';
+    if ((result as any).status) return String((result as any).status);
+  }
+  return tool;
+}
+
 /**
  * Transform a Mastra fullStream part iterable into Cartsmith SSE frame strings.
  * Guarantees correlation-first and exactly-one-terminal, even if `parts` throws.
@@ -58,8 +126,15 @@ export async function* toCartsmithFrames(
      * catching the THROW path, which an in-loop `error`-part flag alone would miss.
      */
     onTerminal?: (kind: 'done' | 'error') => void;
+    /**
+     * Max serialized bytes for a `trace` frame's args/result payload. Oversize
+     * payloads are replaced with a truncation marker so one big tool result can
+     * neither freeze the client nor blow the frame. Defaults to 8 KiB.
+     */
+    traceMaxBytes?: number;
   },
 ): AsyncGenerator<string> {
+  const traceMaxBytes = opts.traceMaxBytes ?? DEFAULT_TRACE_MAX_BYTES;
   if (!opts.skipCorrelation) yield serializeFrame('correlation', opts.correlationId);
   const plan: PlanState = { todos: [] };
   let terminated = false;
@@ -75,6 +150,14 @@ export async function* toCartsmithFrames(
         case 'tool-call-start': {
           const name = field<string>(part, 'toolName') ?? field<string>(part, 'name') ?? 'tool';
           yield serializeFrame('status', JSON.stringify({ phase: 'tool_start', name }));
+          // Rich trace frame (args) so the chat UI can show what the agent asked for
+          // (e.g. the MQL filter). Additive: `status` above still drives the live pill.
+          yield serializeFrame('trace', JSON.stringify({
+            id: field<string>(part, 'toolCallId') ?? field<string>(part, 'id'),
+            phase: 'start',
+            tool: name,
+            args: capPayload(field(part, 'args'), traceMaxBytes),
+          }));
           if (opts.emitPlanFrames) {
             plan.todos.push({ id: String(plan.todos.length + 1), text: name, status: 'in_progress' });
             yield serializeFrame('plan', planSnapshot(plan));
@@ -84,6 +167,14 @@ export async function* toCartsmithFrames(
         case 'tool-result': {
           const name = field<string>(part, 'toolName') ?? field<string>(part, 'name') ?? 'tool';
           yield serializeFrame('status', JSON.stringify({ phase: 'tool_end', name }));
+          const result = field(part, 'result');
+          yield serializeFrame('trace', JSON.stringify({
+            id: field<string>(part, 'toolCallId') ?? field<string>(part, 'id'),
+            phase: 'end',
+            tool: name,
+            summary: summarizeResult(name, result),
+            result: capPayload(result, traceMaxBytes),
+          }));
           if (opts.emitPlanFrames) {
             const todo = [...plan.todos].reverse().find(t => t.text === name && t.status === 'in_progress');
             if (todo) todo.status = 'completed';

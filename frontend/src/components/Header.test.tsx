@@ -88,4 +88,28 @@ describe('Header (Spec 550)', () => {
     const options = Array.from(select.querySelectorAll('option')).map((o) => o.textContent);
     expect(options).toEqual(['haiku-4-5', 'sonnet-4-6']);
   });
+
+  it('REQ-E-070: hides the model picker when switching is locked (AI4 public domain)', async () => {
+    mockApi(
+      { email: 'a@b.com', username: 'a', groups: [] },
+      {
+        default: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+        models: [{ id: 'us.anthropic.claude-haiku-4-5-20251001-v1:0', label: 'Claude Haiku 4.5 (Bedrock, fast)' }],
+        allowSwitch: false,
+      },
+    );
+
+    render(
+      <AuthProvider>
+        <ChatProvider>
+          <Header />
+        </ChatProvider>
+      </AuthProvider>,
+    );
+
+    // The pinned model is shown as a static badge…
+    expect(await screen.findByText(/Claude Haiku 4.5/i)).toBeInTheDocument();
+    // …and there is NO selectable dropdown.
+    expect(screen.queryByLabelText('Select Bedrock model')).toBeNull();
+  });
 });

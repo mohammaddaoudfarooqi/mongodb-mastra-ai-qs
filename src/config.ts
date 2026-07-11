@@ -19,6 +19,9 @@ export interface Config {
   rrfK: number;
   dataAgentAllowList: string[]; dataAgentLimit: number;
   emitPlanFrames: boolean; ingestDescribe: boolean; ingestAssetsDir?: string; ingestPdfScale: number;
+  // Max serialized bytes for a `trace` SSE frame's args/result (the in-chat "watch it work"
+  // panel). Oversize tool payloads are truncated so one big result can't freeze the client.
+  traceMaxBytes: number;
   port: number; defaultUserId: string;
   // Persist app logs to a MongoDB collection (in addition to stdout/stderr). `enabled`
   // defaults on; `collection` is the target name; `retentionDays` drives a TTL index so
@@ -30,6 +33,10 @@ export interface Config {
   // 'sso' requires a registered authenticator (a deployment-provided adapter) and rejects
   // unauthenticated requests; client-supplied identity is ignored. `authRequired` is derived (sso ⇒ true).
   authMode: 'local' | 'sso'; authRequired: boolean;
+  // Whether the storefront may switch the LLM model from the UI. Default true (dev + self-deploy).
+  // The public AI4 domain sets this false so every attendee runs the same pinned default model
+  // (cost/consistency control): /api/models then returns ONLY the default and the picker is hidden.
+  allowModelSwitch: boolean;
 }
 
 const bool = (v: string | undefined, d: boolean) => (v == null ? d : v === 'true');
@@ -86,6 +93,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       .split(',').map(s => s.trim()).filter(Boolean),
     dataAgentLimit: num(env.DATA_AGENT_LIMIT, 25),
     emitPlanFrames: bool(env.EMIT_PLAN_FRAMES, false),
+    traceMaxBytes: num(env.TRACE_MAX_BYTES, 8192),
     ingestDescribe: bool(env.INGEST_DESCRIBE, true),
     ingestAssetsDir: parsed.INGEST_ASSETS_DIR || undefined,
     ingestPdfScale: num(env.INGEST_PDF_SCALE, 2.0),
@@ -98,6 +106,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     },
     authMode,
     authRequired: authMode === 'sso',
+    allowModelSwitch: bool(env.ALLOW_MODEL_SWITCH, true),
     mongoPool: {
       maxPoolSize: num(env.MONGO_MAX_POOL_SIZE, 100),
       minPoolSize: num(env.MONGO_MIN_POOL_SIZE, 10),

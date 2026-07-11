@@ -125,3 +125,30 @@ describe('buildDataQueryTool retrieval-grounding seam', () => {
     expect(cb).not.toHaveBeenCalled();
   });
 });
+
+describe('buildDataQueryTool trace seam (sub-agent trace out-of-band)', () => {
+  it('reports the MQL query + result summary via onTrace so the sub-agent step is not lost', async () => {
+    const steps: any[] = [];
+    const tool = buildDataQueryTool({
+      db: stubDb([{ _id: 'prod_0021' }, { _id: 'prod_0061' }]),
+      allowList, limit: 25, onTrace: s => steps.push(s),
+    });
+    await tool.execute!({ collection: 'products', filter: { on_sale: true } } as any, {} as any);
+    expect(steps).toHaveLength(1);
+    expect(steps[0].tool).toBe('dataQuery');
+    // The actual MQL the agent ran, so the chat UI can show it.
+    expect(steps[0].args).toEqual({ collection: 'products', filter: { on_sale: true } });
+    // A human summary + the returned docs.
+    expect(steps[0].summary).toContain('2');
+    expect(steps[0].result).toMatchObject({ ok: true });
+  });
+
+  it('reports a rejected (guardrail-blocked) query via onTrace too', async () => {
+    const steps: any[] = [];
+    const tool = buildDataQueryTool({ db: stubDb([]), allowList, limit: 25, onTrace: s => steps.push(s) });
+    await tool.execute!({ collection: 'carts', filter: {} } as any, {} as any); // disallowed collection
+    expect(steps).toHaveLength(1);
+    expect(steps[0].tool).toBe('dataQuery');
+    expect(steps[0].result).toMatchObject({ ok: false });
+  });
+});

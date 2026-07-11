@@ -91,6 +91,13 @@ export function buildDataQueryTool(args: {
    * Only products rows are reported — orders/promotions ids are irrelevant to the cart.
    */
   onProductsFound?: (ids: string[]) => void;
+  /**
+   * Reports this dataQuery step (the MQL args + result + a human summary) for the in-chat
+   * agent-trace panel. dataQuery runs inside the dealsAndCart sub-agent, whose inner tool
+   * calls do NOT surface on the parent stream as tool-call/tool-result parts, so this
+   * out-of-band hook is how the "watch it work" trace sees the real MongoDB query.
+   */
+  onTrace?: (step: { tool: string; args: unknown; summary: string; result: unknown }) => void;
 }) {
   return createTool({
     id: 'dataQuery',
@@ -110,6 +117,12 @@ export function buildDataQueryTool(args: {
       );
       if (result.ok && inputData.collection === 'products' && result.rows?.length) {
         args.onProductsFound?.((result.rows as any[]).map(r => String(r._id)));
+      }
+      if (args.onTrace) {
+        const summary = result.ok
+          ? `${result.rows?.length ?? 0} documents from ${inputData.collection}`
+          : `rejected: ${(result as any).reason ?? 'blocked'}`;
+        args.onTrace({ tool: 'dataQuery', args: { collection: inputData.collection, filter: inputData.filter }, summary, result });
       }
       return result;
     },

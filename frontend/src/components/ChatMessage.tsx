@@ -3,6 +3,11 @@ import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Message } from '../context/ChatContext';
 import { useChat } from '../context/ChatContext';
+import AgentTrace from './AgentTrace';
+
+// The in-chat agent-trace panel is on by default; set VITE_AGENT_TRACE=false to hide it
+// (e.g. a minimal self-deploy). Vite inlines import.meta.env at build time.
+const AGENT_TRACE_ENABLED = import.meta.env.VITE_AGENT_TRACE !== 'false';
 
 /**
  * URL policy for assistant-rendered markdown. The assistant's output is model-controlled,
@@ -235,6 +240,11 @@ const ChatMessage: React.FC<Props> = React.memo(({ message }) => {
           </div>
         )}
       </div>
+      {AGENT_TRACE_ENABLED && !isUser && !isError && message.trace && message.trace.length > 0 && (
+        <div style={{ width: '100%', marginTop: 6 }}>
+          <AgentTrace steps={message.trace} />
+        </div>
+      )}
       {canRate && (
         <div style={feedbackRowStyle}>
           <button

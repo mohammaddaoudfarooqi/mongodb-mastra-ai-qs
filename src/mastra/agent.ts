@@ -3,6 +3,7 @@ import { Memory } from '@mastra/memory';
 import { MongoDBStore } from '@mastra/mongodb';
 import type { Config } from '../config';
 import type { TurnSignals } from '../cache/cache-decisions';
+import type { TraceSink } from '../server/trace';
 import { getLLM } from './models';
 import { getQueryEmbedder, getReranker, type VoyageEmbedder, type VoyageReranker } from './embed';
 import { getMemoryEmbedder } from './memory-embedder';
@@ -26,6 +27,10 @@ export interface TurnContext {
   /** Set by the `checkout` tool when the shopper asks to buy; the /chat bridge
    *  reads it after the agent turn to start the order workflow (REQ-E-030). */
   checkoutRequested?: boolean;
+  /** Per-turn out-of-band agent-trace sink. Sub-agent tools (dataQuery, cart) push their
+   *  steps here during execute; the /chat handler drains it to emit `trace` SSE frames the
+   *  in-chat "watch it work" panel renders. See src/server/trace.ts for why this is needed. */
+  trace?: TraceSink;
 }
 
 /**
@@ -193,6 +198,7 @@ export function buildConcierge(cfg: Config, turn: TurnContext, deps?: ConciergeD
     db, allowList: cfg.dataAgentAllowList, limit: cfg.dataAgentLimit,
     onSignals: () => { turn.signals.dataQueryRan = true; },
     onProductsFound: ids => { for (const id of ids) turnProductIds.add(id); },
+    onTrace: step => turn.trace?.push(step),
   });
   const cart = buildCartTools({
     db,

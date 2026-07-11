@@ -44,7 +44,7 @@ memory_embed_model = "voyage-3.5"
 llm_provider       = "bedrock"
 # Bedrock cross-region inference-profile id. Verify against:
 #   aws bedrock list-inference-profiles --region us-west-2
-bedrock_model_id   = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+bedrock_model_id   = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 memory_semantic_recall = "false"
 memory_last_messages   = "10"

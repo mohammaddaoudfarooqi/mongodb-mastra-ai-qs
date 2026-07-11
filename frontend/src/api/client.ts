@@ -54,6 +54,9 @@ export interface ModelOption {
 export interface ModelsResponse {
   default: string;
   models: ModelOption[];
+  // When false (e.g. the public AI4 domain), the UI must NOT offer a model picker —
+  // every visitor runs the pinned default. Absent/true ⇒ switching allowed.
+  allowSwitch?: boolean;
 }
 
 /**
@@ -321,6 +324,36 @@ function asInterruptEvent(v: unknown): InterruptEvent | null {
   return { thread_id: v.thread_id, action: { name: a.name, args: a.args, description: a.description }, allowed_decisions: decisions };
 }
 
+/**
+ * A single agent-trace step for the in-chat "watch it work" panel. Emitted on a `trace`
+ * SSE frame — one on tool start (with `args`) and one on tool end (with `summary` + `result`),
+ * correlated by `id`. `oob` marks steps collected out-of-band from a sub-agent (see
+ * src/server/trace.ts) — the frontend treats them identically.
+ */
+export interface TraceEvent {
+  id?: string;
+  phase: 'start' | 'end';
+  tool: string;
+  args?: unknown;
+  summary?: string;
+  result?: unknown;
+  oob?: boolean;
+}
+
+function asTraceEvent(v: unknown): TraceEvent | null {
+  if (!isObj(v) || typeof v.tool !== 'string') return null;
+  if (v.phase !== 'start' && v.phase !== 'end') return null;
+  return {
+    id: typeof v.id === 'string' ? v.id : undefined,
+    phase: v.phase,
+    tool: v.tool,
+    args: v.args,
+    summary: typeof v.summary === 'string' ? v.summary : undefined,
+    result: v.result,
+    oob: v.oob === true,
+  };
+}
+
 export interface StreamHandlers {
   onToken: (token: string) => void;
   // First frame of every /chat stream: the per-turn correlation id. Used as
@@ -328,6 +361,9 @@ export interface StreamHandlers {
   onCorrelation?: (runId: string) => void;
   onPlan?: (plan: PlanSnapshot) => void;
   onStatus?: (status: StatusEvent) => void;
+  // Fired per `trace` frame: a structured tool step (args on start, result+summary on end)
+  // for the in-chat agent-trace panel.
+  onTrace?: (trace: TraceEvent) => void;
   // Spec 530: fired on a non-terminal `interrupt` frame (checkout HITL pause).
   onInterrupt?: (ev: InterruptEvent) => void;
   onDone: () => void;
@@ -461,6 +497,15 @@ async function consumeSSEStream(
           try {
             const parsed = asStatusEvent(JSON.parse(data));
             if (parsed) handlers.onStatus(parsed);
+          } catch {
+            /* malformed frame; ignore */
+          }
+        }
+      } else if (eventName === 'trace') {
+        if (handlers.onTrace) {
+          try {
+            const parsed = asTraceEvent(JSON.parse(data));
+            if (parsed) handlers.onTrace(parsed);
           } catch {
             /* malformed frame; ignore */
           }

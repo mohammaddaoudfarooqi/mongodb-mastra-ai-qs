@@ -162,7 +162,7 @@ variable "llm_provider" {
 variable "bedrock_model_id" {
   description = "Bedrock cross-region inference-profile id. Verify against `aws bedrock list-inference-profiles --region <region>` before deploy."
   type        = string
-  default     = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+  default     = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 }
 
 variable "response_cache_enabled" {

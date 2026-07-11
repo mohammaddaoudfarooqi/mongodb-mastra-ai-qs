@@ -151,6 +151,9 @@ function ModelBadge() {
   const { model, setModel } = useChat();
   const [options, setOptions] = useState<ModelOption[]>([]);
   const [defaultId, setDefaultId] = useState<string>('');
+  // Server decides whether switching is offered. Locked on the public AI4 domain so every
+  // visitor runs the same pinned model; the picker becomes a read-only badge.
+  const [allowSwitch, setAllowSwitch] = useState<boolean>(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -159,6 +162,7 @@ function ModelBadge() {
         if (cancelled) return;
         setOptions(r.models);
         setDefaultId(r.default);
+        setAllowSwitch(r.allowSwitch !== false);
         if (!model && r.default) setModel(r.default);
       })
       .catch(() => {
@@ -170,12 +174,18 @@ function ModelBadge() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Read-only badge: no models yet, OR switching is locked. Show the chosen/default model's
+  // label (falling back to its id) so a locked deploy still names the model it's running.
+  const lockedLabel =
+    options.find((o) => o.id === (model || defaultId))?.label || defaultId || 'loading…';
+  const showStatic = options.length === 0 || !allowSwitch;
+
   return (
     <div style={badgeStyle} title="Bedrock inference profile">
       <svg width="9" height="9" viewBox="0 0 16 16" fill="var(--spring-green)">
         <circle cx="8" cy="8" r="5" />
       </svg>
-      {options.length === 0 ? (
+      {showStatic ? (
         <span
           style={{
             overflow: 'hidden',
@@ -183,7 +193,7 @@ function ModelBadge() {
             whiteSpace: 'nowrap',
           }}
         >
-          {defaultId || 'loading…'}
+          {lockedLabel}
         </span>
       ) : (
         <select

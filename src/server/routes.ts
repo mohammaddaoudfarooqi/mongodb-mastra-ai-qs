@@ -4,7 +4,8 @@ import { MongoClient, type Db } from 'mongodb';
 import type { Config } from '../config';
 import { logger, setLogSink } from '../observability/logger';
 import { createMongoLogSink } from '../observability/mongo-log-sink';
-import { toCartsmithFrames, serializeFrame, field, type StreamPart } from './sse';
+import { toCartsmithFrames, serializeFrame, field, capTraceStep, type StreamPart } from './sse';
+import { TraceSink } from './trace';
 import { projectMessage } from './projection';
 import { buildConcierge, buildConciergeDeps, type TurnContext, type ConciergeDeps } from '../mastra/agent';
 import { computeCartTotals, type CartLine } from '../mastra/tools/cart';
@@ -141,7 +142,8 @@ export const handlers = {
     const threadId = body.thread_id || `${userId}:default`;
     const model = body.model || cfg.llmModel;
     const correlationId = rc.nextCorrelationId();
-    const turn: TurnContext = { signals: freshSignals(), modelOverride: body.model, userId, threadId, message };
+    const traceSink = new TraceSink();
+    const turn: TurnContext = { signals: freshSignals(), modelOverride: body.model, userId, threadId, message, trace: traceSink };
     const deps = rc.getSharedDeps();
     const { agent, memory } = (rc.buildAgent ?? buildConcierge)(cfg, turn, deps);
 
@@ -246,7 +248,15 @@ export const handlers = {
       // `done` terminal, and ONLY on the success path — never after an `error` (so
       // the INV-002 "interrupt always followed by done" contract holds without this
       // handler parsing sse.ts's wire format). No workflow starts on an errored turn.
+      // Flush any out-of-band trace steps (sub-agent tools whose calls never reached the
+      // tool-call/tool-result stream parts — see src/server/trace.ts) as `trace` frames, then
+      // the checkout interrupt. Emitted in `beforeDone` so both land on the SUCCESS path only,
+      // right before the single `done` terminal (never after an `error`).
       async function* checkoutTrailer(): AsyncGenerator<string> {
+        for (const step of traceSink.list()) {
+          try { yield capTraceStep(step, cfg.traceMaxBytes); }
+          catch (err) { logger.warn('trace step emit failed', { err: String(err), correlationId }); }
+        }
         if (!turn.checkoutRequested || !rc.orderRunner) return;
         try {
           const run = await rc.orderRunner.start(threadId, userId);
@@ -268,7 +278,7 @@ export const handlers = {
         }
       }
       for await (const frame of toCartsmithFrames(parts(), {
-        correlationId, emitPlanFrames: cfg.emitPlanFrames, beforeDone: checkoutTrailer, skipCorrelation: true,
+        correlationId, emitPlanFrames: cfg.emitPlanFrames, traceMaxBytes: cfg.traceMaxBytes, beforeDone: checkoutTrailer, skipCorrelation: true,
         // Authoritative terminal signal: covers both `error` parts and thrown streams (the
         // throw path an in-loop flag alone would miss). Only a clean `done` clears the flag.
         onTerminal: kind => { streamErrored = kind !== 'done'; },
@@ -291,12 +301,13 @@ export const handlers = {
     });
   },
 
-  models: (rc: RouteContext) => (c: Context): Response => c.json({
-    default: rc.cfg.llmModel,
-    // Pass the provider so a Bedrock deploy surfaces inference-profile ids (not the
-    // Anthropic-API ids Bedrock rejects).
-    models: modelChoices(rc.cfg.llmModel, rc.cfg.llmProvider),
-  }),
+  models: (rc: RouteContext) => (c: Context): Response => {
+    // Full catalog when switching is allowed; when locked (AI4 public domain), surface ONLY
+    // the pinned default so every attendee runs the same model and the UI hides the picker.
+    const full = modelChoices(rc.cfg.llmModel, rc.cfg.llmProvider);
+    const models = rc.cfg.allowModelSwitch ? full : full.slice(0, 1);
+    return c.json({ default: rc.cfg.llmModel, models, allowSwitch: rc.cfg.allowModelSwitch });
+  },
 
   // The frontend's AuthProvider calls GET /auth/me on mount and throws on non-2xx.
   // In SSO mode this returns the authenticated user (client cannot influence it) and

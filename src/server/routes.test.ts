@@ -46,6 +46,32 @@ describe('buildRouteContext (REQ-E-011: connection-free construction)', () => {
   });
 });
 
+describe('handlers.models (REQ-E-070: model-switch lock)', () => {
+  function modelsApp(over: Partial<Config> = {}) {
+    const rc = stubRc({ cfg: { ...cfg, ...over } as Config });
+    const app = new Hono();
+    app.get('/models', handlers.models(rc));
+    return app;
+  }
+
+  it('lists the full catalog when model switching is allowed (default)', async () => {
+    const res = await modelsApp({ llmModel: 'claude-haiku-4-5', allowModelSwitch: true } as Partial<Config>).request('/models');
+    const body = await res.json() as { default: string; models: { id: string; label: string }[]; allowSwitch: boolean };
+    expect(body.default).toBe('claude-haiku-4-5');
+    expect(body.models.length).toBeGreaterThan(1);
+    expect(body.allowSwitch).toBe(true);
+  });
+
+  it('returns ONLY the default model when switching is locked (AI4 public domain)', async () => {
+    const app = modelsApp({ llmModel: 'claude-haiku-4-5', allowModelSwitch: false } as Partial<Config>);
+    const res = await app.request('/models');
+    const body = await res.json() as { default: string; models: { id: string; label: string }[]; allowSwitch: boolean };
+    expect(body.default).toBe('claude-haiku-4-5');
+    expect(body.models).toEqual([{ id: 'claude-haiku-4-5', label: expect.any(String) }]);
+    expect(body.allowSwitch).toBe(false);
+  });
+});
+
 describe('handlers.cart (REQ-E-001 / INV-003: shape via the shared handler)', () => {
   function appWithCart(doc: any) {
     const rc = stubRc({
@@ -125,6 +151,39 @@ describe('handlers.chat (REQ-E-004 / boundary #3: SSE streams incrementally)', (
     expect(text).toContain('event: token\ndata: Hel');
     expect(text).toContain('event: token\ndata: lo');
     expect(text).toContain('event: done');
+  });
+
+  // Task 7 / boundary #3: a sub-agent tool step pushed into turn.trace (out-of-band, because
+  // the dealsAndCart sub-agent's dataQuery never surfaces as a parent tool-call/tool-result
+  // part) must be emitted as a `trace` SSE frame carrying the real MQL + result, before `done`.
+  it('emits an out-of-band sub-agent trace step as a trace frame before done', async () => {
+    const rc = stubRc({
+      cfg: { ...cfg, responseCache: { ...cfg.responseCache, enabled: false }, traceMaxBytes: 8192 },
+      getSharedDeps: () => ({} as any),
+      buildAgent: (_c: Config, turn: any) => {
+        // Simulate the sub-agent's dataQuery pushing a step during execute.
+        turn.trace?.push({
+          tool: 'dataQuery',
+          args: { collection: 'products', filter: { on_sale: true } },
+          summary: '2 documents from products',
+          result: { ok: true, rows: [{ _id: 'prod_0021' }, { _id: 'prod_0061' }] },
+        });
+        return { agent: fakeAgent, memory: fakeMemory };
+      },
+    });
+    const app = new Hono();
+    app.post('/chat', handlers.chat(rc));
+    const res = await app.request('/chat', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: 'show me sale items', user_id: 'demo', thread_id: 't1' }),
+    });
+    const text = await res.text();
+    expect(text).toContain('event: trace');
+    expect(text).toContain('"tool":"dataQuery"');
+    expect(text).toContain('"on_sale":true'); // the real MQL filter is surfaced
+    expect(text).toContain('prod_0021');       // the returned docs are surfaced
+    // Ordering: the trace frame precedes the terminal done frame.
+    expect(text.indexOf('event: trace')).toBeLessThan(text.indexOf('event: done'));
   });
 
   // Reviewer finding #6: a turn that grounds on knowledgeSearch but then ERRORS mid-stream

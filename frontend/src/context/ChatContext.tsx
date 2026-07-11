@@ -20,6 +20,7 @@ import {
   type PlanSnapshot,
   type SavedFile,
   type StoredMessage,
+  type TraceEvent,
 } from '../api/client';
 import { useAuth } from './AuthContext';
 
@@ -53,6 +54,9 @@ export interface Message {
   runId?: string;
   // Which thumbs rating the user gave this assistant turn, if any.
   feedback?: 'up' | 'down';
+  // Agent-trace steps for this assistant turn (the "watch it work" panel): the
+  // tools the agent ran + the real MongoDB queries/results, from `trace` frames.
+  trace?: TraceEvent[];
 }
 
 interface ChatContextValue {
@@ -119,6 +123,7 @@ type Action =
   | { type: 'REPLACE_WITH_ERROR'; id: string; detail: string }
   | { type: 'SET_PLAN'; plan: PlanSnapshot }
   | { type: 'SET_ACTIVE_TOOL'; tool: string }
+  | { type: 'ADD_TRACE_EVENT'; id: string; trace: TraceEvent }
   | { type: 'SET_FILES'; files: SavedFile[] }
   | { type: 'SET_CART'; cart: CartResponse }
   | { type: 'SET_INTERRUPT'; interrupt: InterruptEvent }
@@ -202,6 +207,13 @@ function reducer(state: State, action: Action): State {
       return { ...state, plan: action.plan };
     case 'SET_ACTIVE_TOOL':
       return { ...state, activeTool: action.tool };
+    case 'ADD_TRACE_EVENT':
+      return {
+        ...state,
+        messages: state.messages.map((m) =>
+          m.id === action.id ? { ...m, trace: [...(m.trace ?? []), action.trace] } : m,
+        ),
+      };
     case 'SET_FILES':
       return { ...state, files: action.files };
     case 'SET_CART':
@@ -466,6 +478,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             type: 'SET_ACTIVE_TOOL',
             tool: status.phase === 'tool_start' ? status.name : '',
           });
+        },
+        onTrace: (trace: TraceEvent) => {
+          if (ctrl.signal.aborted) return;
+          // Append the tool step to THIS assistant turn's trace, for the
+          // "watch it work" panel. Additive — never blocks tokens.
+          dispatch({ type: 'ADD_TRACE_EVENT', id: assistantId, trace });
         },
         onInterrupt: (ev: InterruptEvent) => {
           if (ctrl.signal.aborted) return;
