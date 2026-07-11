@@ -161,6 +161,39 @@ async function main() {
     record('coupon (apply SAVE5)', !bad, bad || `saved ${couponSavings.toFixed(2)}, total ${total.toFixed(2)}`);
   }
 
+  // Bulk-add + checkout-clears beat (regression guard for the split-cart bug): a bulk "add one
+  // of every discounted item" fires many cartAdd calls concurrently. Without the unique
+  // {userId,threadId} index, racing upserts split the cart across several docs, so checkout (a
+  // single findOne/deleteOne on the key) only quotes/clears ONE — the rest survive as phantom
+  // cart items after the order (the "1 item still in cart after checkout" symptom). Here we bulk
+  // add, check out, approve, and REQUIRE the cart to be empty afterwards. On a healthy box the
+  // whole cart is one doc, so it clears completely.
+  {
+    const bulkTid = `${uid}:bulk:${Date.now()}`;
+    await chat({ user_id: uid, thread_id: bulkTid, message: 'Add one of every discounted item to my cart, then tell me the real cart total.' });
+    const beforeRes = await fetch(`${API}/cart?user_id=${encodeURIComponent(uid)}&thread_id=${encodeURIComponent(bulkTid)}`);
+    const before = await beforeRes.json() as { lines: unknown[] };
+    const added = before.lines?.length ?? 0;
+    if (added < 2) {
+      record('bulk-add + checkout clears cart', false, `bulk add produced ${added} line(s) (expected several)`);
+    } else {
+      const co = await chat({ user_id: uid, thread_id: bulkTid, message: 'check out' });
+      if (!co.interrupt) {
+        record('bulk-add + checkout clears cart', false, 'no interrupt frame on bulk checkout');
+      } else {
+        const resume = await chat({ thread_id: bulkTid, decision: 'approve', cart_version: co.interrupt.action?.args?.cart_version }, '/interrupts/resume');
+        const placed = /placed/i.test(resume.tokens);
+        const afterRes = await fetch(`${API}/cart?user_id=${encodeURIComponent(uid)}&thread_id=${encodeURIComponent(bulkTid)}`);
+        const after = await afterRes.json() as { lines: unknown[] };
+        const leftover = after.lines?.length ?? 0;
+        const bad = !placed ? `resume did not place: "${resume.tokens.trim().slice(0, 80)}"`
+          : leftover > 0 ? `${leftover} item(s) survived after checkout (split-cart regression — carts unique index missing?)`
+          : '';
+        record('bulk-add + checkout clears cart', !bad, bad || `added ${added}, cart empty after order`);
+      }
+    }
+  }
+
   // Checkout HITL: check out the cart, expect an interrupt, then approve → order placed → cart cleared.
   {
     const r = await chat({ user_id: uid, thread_id: cartTid, message: 'check out' });

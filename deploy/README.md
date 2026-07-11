@@ -79,6 +79,24 @@ corporate/VPN network ranges — so the storefront and Studio are reachable only
 Set `office_cidrs` in your (gitignored) `terraform.tfvars`; the list is kept local and never
 committed. The deploy machine's `admin_cidr` additionally gets SSH and the Atlas seed path.
 
+## Redeploy an existing box
+
+To push the latest `main` onto a box that's already running (the presenter's stage EC2, or any
+self-hosted host) — WITHOUT re-running Terraform:
+
+```bash
+deploy/scripts/redeploy.sh [user@host] [git-ref]     # defaults: ec2-user@34.220.2.14  main
+```
+
+It: `git fetch` **then** reset (never resets to a stale cached ref) → rebuild + restart the
+containers → **re-provision Atlas indexes** (`pnpm provision` inside the studio container) →
+verify the running bundle actually contains the new code → health-check. Prefer this over the
+manual `ssh … git reset --hard … docker compose up --build` dance, which has two footguns the
+script closes: a bare `git reset --hard origin/main` can land on a **stale** ref, and the image
+build does **not** run `pnpm provision`, so an index/schema change (e.g. the `carts` unique
+`{userId,threadId}` index) silently never reaches the cluster. Set `SENTINEL=<symbol>` to assert
+a specific just-added string is present in the built bundle.
+
 ## Teardown
 
 ```bash
