@@ -24,6 +24,8 @@ export interface CurrentUser {
   groups: string[];
   // When true (public AI4 domain), the SPA shows the attendee capture gate before the store.
   leadGate?: boolean;
+  // When true (public AI4 domain), the SPA shows only the stateless, cache-safe demo prompts.
+  curatedPresets?: boolean;
 }
 
 export interface LeadSubmission {

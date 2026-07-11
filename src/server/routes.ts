@@ -360,10 +360,12 @@ export const handlers = {
   authMe: (rc: RouteContext) => async (c: Context): Promise<Response> => {
     // leadGate tells the SPA whether to show the attendee capture screen (public AI4 domain).
     const leadGate = rc.cfg.leadGate?.enabled ?? false;
+    // curatedPresets tells the SPA to show only the stateless, cache-safe demo prompts.
+    const curatedPresets = rc.cfg.curatedPresets ?? false;
     const id = await getAuthenticator()(c);
-    if (id?.userId) return c.json({ email: id.userId, username: id.userId, groups: [] as string[], leadGate });
+    if (id?.userId) return c.json({ email: id.userId, username: id.userId, groups: [] as string[], leadGate, curatedPresets });
     if (rc.cfg.authRequired) return c.json({ detail: 'authentication required' }, 401);
-    return c.json({ email: rc.cfg.defaultUserId, username: rc.cfg.defaultUserId, groups: [] as string[], leadGate });
+    return c.json({ email: rc.cfg.defaultUserId, username: rc.cfg.defaultUserId, groups: [] as string[], leadGate, curatedPresets });
   },
 
   health: () => (c: Context): Response => c.json({ status: 'ok' }),

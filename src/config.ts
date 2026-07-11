@@ -46,6 +46,10 @@ export interface Config {
   // Attendee lead-capture gate (default OFF). On for the public AI4 domain: the client shows a
   // capture screen and POSTs to /api/leads, which persists to the leads collection in Atlas.
   leadGate: { enabled: boolean; collection: string };
+  // Curated preset set (default OFF). On for the public AI4 domain: the SPA shows ONLY the
+  // stateless, cache-safe demo prompts and hides the stateful cart/checkout/memory presets that
+  // can't work as one-click launches on a shared-identity box. The stage box keeps the full set.
+  curatedPresets: boolean;
 }
 
 const bool = (v: string | undefined, d: boolean) => (v == null ? d : v === 'true');
@@ -131,6 +135,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       enabled: bool(env.LEAD_GATE_ENABLED, false),
       collection: env.LEAD_GATE_COLLECTION ?? 'leads',
     },
+    curatedPresets: bool(env.CURATED_PRESETS, false),
     mongoPool: {
       maxPoolSize: num(env.MONGO_MAX_POOL_SIZE, 100),
       minPoolSize: num(env.MONGO_MIN_POOL_SIZE, 10),

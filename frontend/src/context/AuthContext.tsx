@@ -22,6 +22,8 @@ interface AuthContextValue {
   error: string | null;
   // When true (public AI4 domain), the SPA must show the attendee capture gate.
   leadGate: boolean;
+  // When true (public AI4 domain), the SPA shows only the stateless, cache-safe demo prompts.
+  curatedPresets: boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -33,6 +35,7 @@ const INITIAL: AuthContextValue = {
   isLoading: true,
   error: null,
   leadGate: false,
+  curatedPresets: false,
 };
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -50,6 +53,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           isLoading: false,
           error: null,
           leadGate: user.leadGate === true,
+          curatedPresets: user.curatedPresets === true,
         });
       })
       .catch((err: unknown) => {

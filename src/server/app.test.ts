@@ -25,8 +25,8 @@ describe('GET /auth/me', () => {
     const app = createApp(cfg);
     const res = await app.request('/auth/me');
     expect(res.status).toBe(200);
-    const body = await res.json() as { email: string; username: string; groups: string[]; leadGate: boolean };
-    expect(body).toEqual({ email: 'demo', username: 'demo', groups: [], leadGate: false });
+    const body = await res.json() as { email: string; username: string; groups: string[]; leadGate: boolean; curatedPresets: boolean };
+    expect(body).toEqual({ email: 'demo', username: 'demo', groups: [], leadGate: false, curatedPresets: false });
   });
 
   it('reflects a different configured defaultUserId', async () => {
