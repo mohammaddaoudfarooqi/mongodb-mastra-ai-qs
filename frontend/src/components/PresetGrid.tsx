@@ -6,6 +6,12 @@ export interface Preset {
   icon: string;
   text: string;
   /**
+   * One-line "what this shows" caption rendered under the prompt. Written for a booth walk-up
+   * who has no context: it names the MongoDB/Mastra capability the prompt demonstrates so the
+   * grid is self-explanatory and can be used step-by-step without a presenter.
+   */
+  sub: string;
+  /**
    * Shown on the CURATED (public AI4 domain) grid. These are the stateless, cache-safe prompts
    * that work as one-click first-turns and can't misbehave on a shared-identity box at scale.
    * Presets without `curated` appear only on the full stage-box grid.
@@ -36,18 +42,21 @@ export const PRESETS: Preset[] = [
   {
     icon: '🏷️',
     text: 'Show me this week\'s sale pamphlet and tell me what\'s discounted.',
+    sub: 'Multimodal retrieval — reads the scanned sale flyer (image + text).',
     curated: true,
   },
   // Beat 2: Hybrid + rerank — RECIPES. Knowledge base retrieval fused and reranked.
   {
     icon: '🍝',
     text: 'I want to make pasta for dinner tonight. Share a quick recipe and its ingredients.',
+    sub: 'Hybrid search + rerank over the recipe knowledge base.',
     curated: true,
   },
   // Beat 3: NL→MQL data agent — live prices + stock for the recipe ingredients.
   {
     icon: '🍗',
     text: 'Find a quick weeknight chicken recipe, then check which ingredients are in stock and their prices.',
+    sub: 'Natural language → MongoDB query for live stock & pricing.',
     curated: true,
   },
   // Beat 4a: Memory. Store a durable preference (cross-thread working memory). STAGE ONLY —
@@ -56,12 +65,14 @@ export const PRESETS: Preset[] = [
   {
     icon: '🧠',
     text: 'Remember that I prefer eco-friendly kitchen products and cook for a family of four.',
+    sub: 'Working memory — saves a durable preference to your profile.',
   },
   // Beat 4b: Memory. Recall it and personalize. STAGE ONLY (and stateful: continues the thread
   // so it recalls what Beat 4a just stored instead of starting cold).
   {
     icon: '💡',
     text: 'Based on what you know about me, what kitchen items would you recommend?',
+    sub: 'Personalization — recalls your saved profile to tailor picks.',
     newThread: false,
   },
   // Beat 5: Cart tools — SHOPPING LIST. Looks a product up, then builds the cart. STAGE ONLY;
@@ -69,30 +80,35 @@ export const PRESETS: Preset[] = [
   {
     icon: '🛒',
     text: 'Add the on-sale kitchen product with the biggest savings to my cart and show my total savings.',
+    sub: 'Agent tools — finds the best deal and updates your cart.',
     newThread: false,
   },
   // Beat 6: Bulk cart-add (intent-gated multi-add) + honest cart totals from cartRead. STAGE ONLY.
   {
     icon: '🧺',
     text: 'Add one of every discounted item to my cart, then tell me the real cart total.',
+    sub: 'Multi-step tool use — bulk add with a grounded, honest total.',
     newThread: false,
   },
   // Beat 7: Hybrid + rerank — COUPONS. Surfaces the coupon-terms knowledge doc.
   {
     icon: '💸',
     text: 'What are the coupon-stacking rules, and which discounts can I combine?',
+    sub: 'Grounded answer from the store-policy knowledge base.',
     curated: true,
   },
   // Beat 8: Hybrid + rerank — LOYALTY. Surfaces the loyalty-program knowledge doc.
   {
     icon: '⭐',
     text: 'What are the Gold tier loyalty benefits, and how do points convert to dollars?',
+    sub: 'Retrieval over loyalty docs — answers only from what it finds.',
     curated: true,
   },
   // Beat 9: Semantic cache. A common question that demonstrates the instant cache hit.
   {
     icon: '⚡',
     text: 'How long does shipping take?',
+    sub: 'Semantic response cache — instant answer to a common question.',
     curated: true,
   },
   // Beat 10: HITL checkout. Starts the approval workflow (pauses for explicit approval). STAGE
@@ -101,6 +117,7 @@ export const PRESETS: Preset[] = [
   {
     icon: '✅',
     text: 'Check out and place my order.',
+    sub: 'Human-in-the-loop checkout — pauses for your approval first.',
     newThread: false,
   },
 ];
@@ -158,6 +175,14 @@ const cardTextStyle: React.CSSProperties = {
   fontSize: 14,
   lineHeight: 1.55,
   color: 'var(--text)',
+};
+
+// "What this shows" caption: quieter than the prompt, sits between it and the Ask affordance.
+// `flex: 1` here (not on the prompt) keeps the Ask row pinned to the bottom across varied heights.
+const cardSubStyle: React.CSSProperties = {
+  fontSize: 12,
+  lineHeight: 1.45,
+  color: 'var(--text-secondary)',
   flex: 1,
 };
 
@@ -193,6 +218,7 @@ function PresetCard({ preset, onAsk }: { preset: Preset; onAsk: () => void }) {
         {preset.icon}
       </span>
       <span style={cardTextStyle}>{preset.text}</span>
+      <span style={cardSubStyle}>{preset.sub}</span>
       <span style={askStyle}>Ask →</span>
     </button>
   );

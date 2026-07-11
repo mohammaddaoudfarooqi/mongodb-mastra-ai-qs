@@ -21,6 +21,12 @@ describe('curatedLine (REQ-E-065: human-readable step)', () => {
     expect(line).toMatch(/search|knowledge/i);
     expect(line).toContain('5');
   });
+
+  it('renders updateWorkingMemory as a plain-language profile line (no raw tool name echo)', () => {
+    const line = curatedLine({ id: 'm1', phase: 'end', tool: 'updateWorkingMemory' });
+    expect(line).toMatch(/profile|memory/i);
+    expect(line).not.toBe('updateWorkingMemory → updateWorkingMemory');
+  });
 });
 
 describe('<AgentTrace> (REQ-E-065)', () => {

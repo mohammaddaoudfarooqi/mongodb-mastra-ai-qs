@@ -78,11 +78,13 @@ tool starts an approval flow that pauses for the shopper's explicit approval. Ca
 the correct response to a buy request; describing an approval or a completed order in prose is
 always wrong.
 Never invent product data; look it up. Reply with one concise, grounded answer.
-Remember the shopper's preferences across sessions.
-When the shopper states a durable preference or a stable fact about themselves (for
-example a style, budget, or category they favor), record it in the shopper profile using
-your working-memory tool and briefly confirm. When you recommend or personalize anything,
-consult the remembered shopper profile first.`;
+MEMORY — write RARELY, read ALWAYS. Update the shopper profile with your working-memory tool
+ONLY on a turn where the shopper states a NEW durable preference or stable fact about themselves
+(a style, budget, dietary need, household size, or category they favor) that is not already in the
+profile. Do NOT call the working-memory tool on an ordinary turn — recipes, product lookups,
+policy questions, cart actions, and checkout carry no new durable fact, so they must NOT trigger a
+memory write (it adds latency for nothing). When you DO record something, briefly confirm it.
+Always consult the remembered shopper profile before you recommend or personalize anything.`;
 
 const DEALS_CART_INSTRUCTIONS = `You handle live retail data and the shopping cart.
 Use dataQuery for live prices, stock, orders, and promotions. Never invent product data; look it up.

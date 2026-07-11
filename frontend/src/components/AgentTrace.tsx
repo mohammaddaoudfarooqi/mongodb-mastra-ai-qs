@@ -26,6 +26,7 @@ function toolIcon(tool: string): string {
   if (tool.startsWith('cart')) return '🛒';
   if (tool === 'applyCoupon') return '🏷️';
   if (tool === 'checkout') return '✅';
+  if (tool === 'updateWorkingMemory') return '🧠';
   return '⚙️';
 }
 
@@ -62,6 +63,11 @@ export function curatedLine(step: TraceEvent | TraceRow): string {
   }
   if (tool.startsWith('cart') || tool === 'applyCoupon' || tool === 'checkout') {
     return summary || tool;
+  }
+  if (tool === 'updateWorkingMemory') {
+    // The raw name renders as an unhelpful "updateWorkingMemory → updateWorkingMemory"; give a
+    // plain-language line for the booth audience.
+    return 'Updated your shopper profile (working memory)';
   }
   return summary ? `${tool} → ${summary}` : tool;
 }
