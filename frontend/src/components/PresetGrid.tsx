@@ -42,7 +42,7 @@ export const PRESETS: Preset[] = [
   {
     icon: '🏷️',
     text: 'Show me this week\'s sale pamphlet and tell me what\'s discounted.',
-    sub: 'Multimodal retrieval — reads the scanned sale flyer (image + text).',
+    sub: 'Multimodal retrieval: reads the scanned sale flyer (image + text).',
     curated: true,
   },
   // Beat 2: Hybrid + rerank — RECIPES. Knowledge base retrieval fused and reranked.
@@ -56,7 +56,7 @@ export const PRESETS: Preset[] = [
   {
     icon: '🍗',
     text: 'Find a quick weeknight chicken recipe, then check which ingredients are in stock and their prices.',
-    sub: 'Natural language → MongoDB query for live stock & pricing.',
+    sub: 'Natural language to MongoDB query for live stock & pricing.',
     curated: true,
   },
   // Beat 4a: Memory. Store a durable preference (cross-thread working memory). STAGE ONLY —
@@ -65,14 +65,14 @@ export const PRESETS: Preset[] = [
   {
     icon: '🧠',
     text: 'Remember that I prefer eco-friendly kitchen products and cook for a family of four.',
-    sub: 'Working memory — saves a durable preference to your profile.',
+    sub: 'Working memory: saves a durable preference to your profile.',
   },
   // Beat 4b: Memory. Recall it and personalize. STAGE ONLY (and stateful: continues the thread
   // so it recalls what Beat 4a just stored instead of starting cold).
   {
     icon: '💡',
     text: 'Based on what you know about me, what kitchen items would you recommend?',
-    sub: 'Personalization — recalls your saved profile to tailor picks.',
+    sub: 'Personalization: recalls your saved profile to tailor picks.',
     newThread: false,
   },
   // Beat 5: Cart tools — SHOPPING LIST. Looks a product up, then builds the cart. STAGE ONLY;
@@ -80,14 +80,14 @@ export const PRESETS: Preset[] = [
   {
     icon: '🛒',
     text: 'Add the on-sale kitchen product with the biggest savings to my cart and show my total savings.',
-    sub: 'Agent tools — finds the best deal and updates your cart.',
+    sub: 'Agent tools: finds the best deal and updates your cart.',
     newThread: false,
   },
   // Beat 6: Bulk cart-add (intent-gated multi-add) + honest cart totals from cartRead. STAGE ONLY.
   {
     icon: '🧺',
     text: 'Add one of every discounted item to my cart, then tell me the real cart total.',
-    sub: 'Multi-step tool use — bulk add with a grounded, honest total.',
+    sub: 'Multi-step tool use: bulk add with a grounded, honest total.',
     newThread: false,
   },
   // Beat 7: Hybrid + rerank — COUPONS. Surfaces the coupon-terms knowledge doc.
@@ -101,14 +101,14 @@ export const PRESETS: Preset[] = [
   {
     icon: '⭐',
     text: 'What are the Gold tier loyalty benefits, and how do points convert to dollars?',
-    sub: 'Retrieval over loyalty docs — answers only from what it finds.',
+    sub: 'Retrieval over loyalty docs: answers only from what it finds.',
     curated: true,
   },
   // Beat 9: Semantic cache. A common question that demonstrates the instant cache hit.
   {
     icon: '⚡',
     text: 'How long does shipping take?',
-    sub: 'Semantic response cache — instant answer to a common question.',
+    sub: 'Semantic response cache: instant answer to a common question.',
     curated: true,
   },
   // Beat 10: HITL checkout. Starts the approval workflow (pauses for explicit approval). STAGE
@@ -117,7 +117,7 @@ export const PRESETS: Preset[] = [
   {
     icon: '✅',
     text: 'Check out and place my order.',
-    sub: 'Human-in-the-loop checkout — pauses for your approval first.',
+    sub: 'Human-in-the-loop checkout: pauses for your approval first.',
     newThread: false,
   },
 ];
