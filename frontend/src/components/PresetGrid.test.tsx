@@ -79,4 +79,36 @@ describe('PresetGrid — stateful checkout does not wipe the cart', () => {
     expect(chatBodies[1].message).toBe('Check out and place my order.');
     expect(chatBodies[1].thread_id).toBe(statelessThread);
   });
+
+  it('stage box: consecutive presets share ONE thread (seamless click-through narrative)', async () => {
+    const chatBodies = mockApi({ email: 'demo', username: 'demo', groups: [], curatedPresets: false });
+    renderGrid();
+
+    // Click three different beats in sequence — the story must build on one continuous thread,
+    // not reset the conversation on each click.
+    fireEvent.click((await screen.findByText(/Show me this week's sale pamphlet/)).closest('button')!);
+    await waitFor(() => expect(chatBodies.length).toBe(1));
+    fireEvent.click(screen.getByText(/I want to make pasta for dinner/).closest('button')!);
+    await waitFor(() => expect(chatBodies.length).toBe(2));
+    fireEvent.click(screen.getByText('How long does shipping take?').closest('button')!);
+    await waitFor(() => expect(chatBodies.length).toBe(3));
+
+    const threads = chatBodies.map(b => b.thread_id);
+    expect(new Set(threads).size).toBe(1); // all three on the same thread
+  });
+});
+
+describe('PresetGrid — public box keeps stateless presets cache-friendly', () => {
+  it('launches each curated prompt on a FRESH thread (response-cache replay at scale)', async () => {
+    const chatBodies = mockApi({ email: 'demo', username: 'demo', groups: [], curatedPresets: true });
+    renderGrid();
+
+    fireEvent.click((await screen.findByText(/Show me this week's sale pamphlet/)).closest('button')!);
+    await waitFor(() => expect(chatBodies.length).toBe(1));
+    fireEvent.click(screen.getByText('How long does shipping take?').closest('button')!);
+    await waitFor(() => expect(chatBodies.length).toBe(2));
+
+    // Distinct threads → each is a first-turn the server can serve from cache.
+    expect(chatBodies[0].thread_id).not.toBe(chatBodies[1].thread_id);
+  });
 });

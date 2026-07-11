@@ -208,11 +208,17 @@ export default function PresetGrid() {
 
   const ask = (preset: Preset) => {
     setOpen(true);
-    // Stateless info prompts launch in a fresh conversation so the server can serve them from
-    // the response cache (Spec 520). Stateful prompts (cart/checkout/memory recall) default to
-    // false so they continue the CURRENT thread — checkout must see the cart the earlier beats
-    // built, not a wiped one.
-    const newThread = preset.newThread !== false;
+    // Two runtimes, two launch strategies:
+    //  - STAGE box (curatedPresets=false): the presenter clicks the beats in sequence to tell
+    //    ONE continuous story, so every preset APPENDS to the current thread (newThread=false).
+    //    Starting fresh each click would CLEAR the screen and reset the conversation — the
+    //    choppy behavior that broke the seamless demo. The "New Conversation" button resets
+    //    deliberately when the presenter wants a clean slate.
+    //  - PUBLIC box (curatedPresets=true): self-service attendees tap ONE prompt; launching it
+    //    fresh lets the server serve it from the response cache (Spec 520) — instant at QR scale.
+    //    Stateful prompts (which set newThread:false) aren't on the curated grid anyway.
+    // The first click on a fresh page still cache-hits either way (the thread is empty).
+    const newThread = curatedPresets ? preset.newThread !== false : false;
     sendMessage(preset.text, { newThread });
   };
 
