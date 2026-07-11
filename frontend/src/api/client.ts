@@ -22,6 +22,30 @@ export interface CurrentUser {
   email: string;
   username: string;
   groups: string[];
+  // When true (public AI4 domain), the SPA shows the attendee capture gate before the store.
+  leadGate?: boolean;
+}
+
+export interface LeadSubmission {
+  name: string;
+  email: string;
+  company?: string;
+  consent?: boolean;
+}
+
+/** POST /api/leads — attendee capture for the public demo (persists to Atlas, best-effort). */
+export async function submitLead(lead: LeadSubmission): Promise<{ ok: boolean; reason?: string }> {
+  try {
+    const res = await fetch(`${API_BASE}/leads`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ ...lead, source: 'ai4' }),
+    });
+    return (await res.json()) as { ok: boolean; reason?: string };
+  } catch {
+    // Fail-open on the client too: never trap an attendee behind a network hiccup.
+    return { ok: true };
+  }
 }
 
 /**

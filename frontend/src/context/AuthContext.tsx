@@ -20,6 +20,8 @@ interface AuthContextValue {
   groups: string[];
   isLoading: boolean;
   error: string | null;
+  // When true (public AI4 domain), the SPA must show the attendee capture gate.
+  leadGate: boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -30,6 +32,7 @@ const INITIAL: AuthContextValue = {
   groups: [],
   isLoading: true,
   error: null,
+  leadGate: false,
 };
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -46,6 +49,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           groups: user.groups ?? [],
           isLoading: false,
           error: null,
+          leadGate: user.leadGate === true,
         });
       })
       .catch((err: unknown) => {

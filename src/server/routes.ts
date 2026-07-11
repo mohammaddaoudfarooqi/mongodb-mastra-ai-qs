@@ -6,6 +6,9 @@ import { logger, setLogSink } from '../observability/logger';
 import { createMongoLogSink } from '../observability/mongo-log-sink';
 import { toCartsmithFrames, serializeFrame, field, capTraceStep, type StreamPart } from './sse';
 import { TraceSink } from './trace';
+import { takeRateLimit } from './rate-limit';
+import { isOverBudget, BUDGET_TRIPPED_MESSAGE } from './budget';
+import { buildLeadDoc, type LeadInput } from './leads';
 import { projectMessage } from './projection';
 import { buildConcierge, buildConciergeDeps, type TurnContext, type ConciergeDeps } from '../mastra/agent';
 import { computeCartTotals, type CartLine } from '../mastra/tools/cart';
@@ -156,6 +159,28 @@ export const handlers = {
       // its own correlation frame so the correlation-first contract still holds exactly once.
       await honoStream.write(serializeFrame('correlation', correlationId));
 
+      // Rate limit (per session/thread) BEFORE any expensive work. Off by default; on for the
+      // public AI4 domain so a QR-code burst can't exhaust the box or the Bedrock quota. Emits a
+      // graceful token + clean `done` (not an error) so the UI shows a friendly message.
+      if (cfg.rateLimit?.enabled) {
+        const rl = await takeRateLimit(rc.db, cfg.rateLimit, threadId);
+        if (!rl.allowed) {
+          logger.warn('rate limit hit', { threadId, count: rl.count, limit: rl.limit, correlationId });
+          await honoStream.write(serializeFrame('token', "You're sending messages quickly — please pause a moment and try again shortly. Thanks for exploring the demo!"));
+          await honoStream.write(serializeFrame('done', ''));
+          return;
+        }
+      }
+
+      // Budget kill-switch: when tripped (e.g. by an AWS Budgets alarm flipping the flag), stop
+      // spending on the LLM and return a graceful message instead of a hard error. Off by default.
+      if (cfg.budget?.enabled && await isOverBudget(rc.db, cfg.budget)) {
+        logger.warn('budget cap active; short-circuiting model call', { correlationId });
+        await honoStream.write(serializeFrame('token', BUDGET_TRIPPED_MESSAGE));
+        await honoStream.write(serializeFrame('done', ''));
+        return;
+      }
+
       // A checkout-intent message must never be served from (or written to) the
       // response cache: a cache hit would `return` before the agent runs, so the
       // checkout tool would never fire and no approval card would appear. Cheap
@@ -301,6 +326,24 @@ export const handlers = {
     });
   },
 
+  // POST /api/leads — attendee capture for the public AI4 demo. Persists to the `leads`
+  // collection in Atlas (best-effort, fail-open: a DB blip returns ok so the gate never traps a
+  // visitor). Only meaningful when the lead gate is enabled; otherwise returns ok as a no-op.
+  leads: (rc: RouteContext) => async (c: Context): Promise<Response> => {
+    let body: LeadInput;
+    try { body = await c.req.json(); } catch { return c.json({ ok: false, reason: 'invalid JSON body' }, 400); }
+    const built = buildLeadDoc(body, new Date(), c.req.header('user-agent') ?? '');
+    if (!built.ok) return c.json({ ok: false, reason: built.reason }, 400);
+    try {
+      await rc.db.collection(rc.cfg.leadGate.collection).insertOne(built.doc as any);
+    } catch (err) {
+      // Fail-open: never block a conference attendee on a lead-write hiccup (the primary capture
+      // is Google Forms + PostHog in the overlay; this Atlas mirror is additive).
+      logger.warn('lead persist failed (fail-open)', { err: String(err) });
+    }
+    return c.json({ ok: true });
+  },
+
   models: (rc: RouteContext) => (c: Context): Response => {
     // Full catalog when switching is allowed; when locked (AI4 public domain), surface ONLY
     // the pinned default so every attendee runs the same model and the UI hides the picker.
@@ -315,10 +358,12 @@ export const handlers = {
   // returns the configured dev user; the frontend shows `email` as a read-only badge
   // and uses it as `user_id` for memory/thread scoping.
   authMe: (rc: RouteContext) => async (c: Context): Promise<Response> => {
+    // leadGate tells the SPA whether to show the attendee capture screen (public AI4 domain).
+    const leadGate = rc.cfg.leadGate?.enabled ?? false;
     const id = await getAuthenticator()(c);
-    if (id?.userId) return c.json({ email: id.userId, username: id.userId, groups: [] as string[] });
+    if (id?.userId) return c.json({ email: id.userId, username: id.userId, groups: [] as string[], leadGate });
     if (rc.cfg.authRequired) return c.json({ detail: 'authentication required' }, 401);
-    return c.json({ email: rc.cfg.defaultUserId, username: rc.cfg.defaultUserId, groups: [] as string[] });
+    return c.json({ email: rc.cfg.defaultUserId, username: rc.cfg.defaultUserId, groups: [] as string[], leadGate });
   },
 
   health: () => (c: Context): Response => c.json({ status: 'ok' }),

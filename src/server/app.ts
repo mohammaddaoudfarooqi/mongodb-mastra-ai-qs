@@ -34,6 +34,7 @@ export function createApp(cfg: Config = loadConfig(), rc: RouteContext = buildRo
   app.get('/files', handlers.files());
   app.post('/interrupts/resume', handlers.resume(rc));
   app.post('/feedback', handlers.feedback(rc));
+  app.post('/leads', handlers.leads(rc));
 
   return app;
 }

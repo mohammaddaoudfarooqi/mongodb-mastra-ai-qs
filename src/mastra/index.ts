@@ -43,6 +43,7 @@ export function buildApiRoutes(rc: RouteContext): ApiRoute[] {
     registerApiRoute('/api/files',          { method: 'GET',  ...pub, handler: h(handlers.files()) }),
     registerApiRoute('/api/interrupts/resume', { method: 'POST', ...pub, handler: h(handlers.resume(rc)) }),
     registerApiRoute('/api/feedback',       { method: 'POST', ...pub, handler: h(handlers.feedback(rc)) }),
+    registerApiRoute('/api/leads',          { method: 'POST', ...pub, handler: h(handlers.leads(rc)) }),
   ];
 }
 

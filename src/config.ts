@@ -37,6 +37,15 @@ export interface Config {
   // The public AI4 domain sets this false so every attendee runs the same pinned default model
   // (cost/consistency control): /api/models then returns ONLY the default and the picker is hidden.
   allowModelSwitch: boolean;
+  // Per-session request rate limit (default OFF). On for the public AI4 domain so a QR-code burst
+  // can't exhaust the single box or the Bedrock quota. See src/server/rate-limit.ts.
+  rateLimit: { enabled: boolean; max: number; windowSeconds: number; collection: string };
+  // Budget kill-switch (default OFF). When a flag doc is set (e.g. by an AWS Budgets alarm), model
+  // calls short-circuit with a graceful message. See src/server/budget.ts.
+  budget: { enabled: boolean; collection: string; flagId: string };
+  // Attendee lead-capture gate (default OFF). On for the public AI4 domain: the client shows a
+  // capture screen and POSTs to /api/leads, which persists to the leads collection in Atlas.
+  leadGate: { enabled: boolean; collection: string };
 }
 
 const bool = (v: string | undefined, d: boolean) => (v == null ? d : v === 'true');
@@ -107,6 +116,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     authMode,
     authRequired: authMode === 'sso',
     allowModelSwitch: bool(env.ALLOW_MODEL_SWITCH, true),
+    rateLimit: {
+      enabled: bool(env.RATE_LIMIT_ENABLED, false),
+      max: num(env.RATE_LIMIT_MAX, 40),
+      windowSeconds: num(env.RATE_LIMIT_WINDOW_SECONDS, 3600),
+      collection: env.RATE_LIMIT_COLLECTION ?? 'ratelimit',
+    },
+    budget: {
+      enabled: bool(env.BUDGET_ENABLED, false),
+      collection: env.BUDGET_COLLECTION ?? 'flags',
+      flagId: env.BUDGET_FLAG_ID ?? 'budget',
+    },
+    leadGate: {
+      enabled: bool(env.LEAD_GATE_ENABLED, false),
+      collection: env.LEAD_GATE_COLLECTION ?? 'leads',
+    },
     mongoPool: {
       maxPoolSize: num(env.MONGO_MAX_POOL_SIZE, 100),
       minPoolSize: num(env.MONGO_MIN_POOL_SIZE, 10),
