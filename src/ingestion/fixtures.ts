@@ -48,12 +48,17 @@ export function recipeIngredientProducts(): Product[] {
     _id: `prod_9${String(i + 1).padStart(3, '0')}`,
     name: ing.name,
     category: 'grocery',
-    description: `${ing.name}: a fresh grocery staple, perfect for home cooking. In stock and ready to ship.`,
+    // Name the ingredient in the description too, so a lexical/substring or $regex lookup on
+    // description finds it even if the agent doesn't guess the exact product name.
+    description: `${ing.name} — ${ing.label} for home cooking (e.g. the 20-Minute Garlic Butter Pasta recipe). In stock and ready to ship.`,
     price_usd: ing.price,
     sale_price_usd: ing.price,
     on_sale: false,
     stock: 99,
-    tags: ['grocery', 'recipe-ingredient'],
+    // Tag with each plain ingredient keyword ("spaghetti", "butter", …) so the NL→MQL agent's
+    // instinctive tag query — {tags: "<ingredient>"} — resolves without needing the exact
+    // product name. This is what makes "add the recipe ingredients" reliably work in the demo.
+    tags: ['grocery', 'recipe-ingredient', ...ing.match],
   }));
 }
 
