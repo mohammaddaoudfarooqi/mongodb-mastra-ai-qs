@@ -71,6 +71,32 @@ describe('buildConcierge', () => {
     const resolved = (memory as any).getMergedThreadConfig();
     expect(resolved.semanticRecall).toMatchObject({ scope: 'resource' });
   });
+
+  it('sanitizes working-memory writes so volatile cart/order state cannot persist to the profile', async () => {
+    // Mastra's built-in working-memory prompt pushes the model to store "any relevant info",
+    // so it writes cart totals/counts into the durable profile; they then read back as
+    // fabricated current cart state on a later turn. buildConciergeDeps installs a sanitizer
+    // at the updateWorkingMemory boundary — verify a leaked-total write is scrubbed before
+    // storage while durable preferences survive.
+    const { buildConcierge } = await import('./agent');
+    const { memory } = buildConcierge(cfg, turn());
+    // Bypass the real Mongo store: updateWorkingMemory awaits this.getMemoryStore().updateResource,
+    // so a fake store lets us assert what the sanitizer handed downstream without a connection.
+    const updateResource = vi.fn().mockResolvedValue(undefined);
+    (memory as any).getMemoryStore = async () => ({ updateResource });
+
+    await memory.updateWorkingMemory({
+      resourceId: 'demo',
+      workingMemory:
+        '# Shopper Profile\n- Preferences: Eco-friendly kitchen products\n- Notes: Cooks for a family of four. Current cart: 25 on-sale items. Subtotal: $1,879.75, Total Savings: $470.00.',
+    } as any);
+
+    expect(updateResource).toHaveBeenCalledTimes(1);
+    const persisted = updateResource.mock.calls[0][0].workingMemory as string;
+    expect(persisted).toContain('Eco-friendly kitchen products');
+    expect(persisted).toContain('Cooks for a family of four.');
+    expect(persisted).not.toMatch(/\$1,879\.75|\$470\.00|Subtotal|Total Savings|current cart/i);
+  });
 });
 
 describe('isBulkAddIntent', () => {

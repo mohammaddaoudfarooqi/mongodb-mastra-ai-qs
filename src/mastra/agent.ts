@@ -12,6 +12,7 @@ import { buildKnowledgeSearchTool } from './tools/knowledge-search';
 import { buildDataQueryTool } from './tools/data-agent';
 import { buildCartTools } from './tools/cart';
 import { buildCheckoutTool } from './tools/checkout';
+import { installWorkingMemorySanitizer } from './working-memory-sanitizer';
 import { MongoClient, Db } from 'mongodb';
 import type { MongoDBVector } from '@mastra/mongodb';
 
@@ -83,8 +84,12 @@ ONLY on a turn where the shopper states a NEW durable preference or stable fact 
 (a style, budget, dietary need, household size, or category they favor) that is not already in the
 profile. Do NOT call the working-memory tool on an ordinary turn — recipes, product lookups,
 policy questions, cart actions, and checkout carry no new durable fact, so they must NOT trigger a
-memory write (it adds latency for nothing). When you DO record something, briefly confirm it.
-Always consult the remembered shopper profile before you recommend or personalize anything.`;
+memory write (it adds latency for nothing). NEVER put VOLATILE state in the profile: cart contents,
+item counts, subtotals, savings, order totals, coupon status, or what is in/out of stock or whether
+the store carries something — those change constantly and live in the cart and product tools, NOT in
+memory. The profile is durable preferences only. When you DO record something, briefly confirm it.
+Always consult the remembered shopper profile before you recommend or personalize anything, but for
+ANY cart contents or total, call the cart tools — never quote a cart figure from the profile.`;
 
 const DEALS_CART_INSTRUCTIONS = `You handle live retail data and the shopping cart.
 Use dataQuery for live prices, stock, orders, and promotions. Never invent product data; look it up.
@@ -181,6 +186,14 @@ export function buildConciergeDeps(cfg: Config): ConciergeDeps {
       workingMemory: { enabled: true, scope: 'resource', template: SHOPPER_PROFILE_TEMPLATE },
     },
   });
+
+  // The durable shopper profile must hold ONLY stable facts (preferences, household size,
+  // favored categories). Mastra's built-in working-memory prompt pushes the model to persist
+  // "any conversation-relevant information" — so it writes volatile cart totals, item counts,
+  // and invented store-availability claims into the profile, which then read back on later
+  // turns as fabricated current state (the "25 items / $1,879.75" recited before any add).
+  // Sanitize at the write boundary so that state can never persist, regardless of the prompt.
+  installWorkingMemorySanitizer(memory);
 
   return { client, db, vector, memory, queryEmbedder: getQueryEmbedder(cfg), reranker: getReranker(cfg) };
 }
