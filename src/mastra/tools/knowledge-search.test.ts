@@ -1,6 +1,6 @@
 // src/mastra/tools/knowledge-search.test.ts
 import { describe, it, expect, vi } from 'vitest';
-import { runKnowledgeSearch, type SearchDeps } from './knowledge-search';
+import { runKnowledgeSearch, hasPerishableHit, type SearchDeps, type KnowledgeHit } from './knowledge-search';
 import type { RankedDoc } from './rrf';
 
 const doc = (id: string, text: string): RankedDoc => ({ id, document: text, metadata: { mediaType: 'text' } });
@@ -36,5 +36,26 @@ describe('runKnowledgeSearch', () => {
   it('returns [] when embed fails', async () => {
     const hits = await runKnowledgeSearch('q', deps({ embed: async () => { throw new Error('embed down'); } }), { rrfK: 60, topK: 2 });
     expect(hits).toEqual([]);
+  });
+});
+
+describe('hasPerishableHit', () => {
+  const hit = (source: string): KnowledgeHit => ({ id: 'x', document: 'd', metadata: { source }, score: 1 });
+
+  it('is true when any hit is from a perishable (marketing) source', () => {
+    // The sale pamphlet / catalog are ingested with source:"marketing" — time-bound content
+    // whose grounded answer must NOT be cached as a fresh opener.
+    expect(hasPerishableHit([hit('knowledge'), hit('marketing')])).toBe(true);
+    expect(hasPerishableHit([hit('marketing')])).toBe(true);
+  });
+
+  it('is false when every hit is a stable knowledge/policy source', () => {
+    expect(hasPerishableHit([hit('knowledge'), hit('knowledge')])).toBe(false);
+  });
+
+  it('is false for no hits and tolerates missing/odd metadata', () => {
+    expect(hasPerishableHit([])).toBe(false);
+    expect(hasPerishableHit([{ id: 'y', document: 'd', metadata: {}, score: 1 }])).toBe(false);
+    expect(hasPerishableHit([{ id: 'z', document: 'd', metadata: { source: 'catalog' }, score: 1 }])).toBe(false);
   });
 });

@@ -7,6 +7,21 @@ import { KNOWLEDGE_INDEX } from '../vector';
 
 export interface KnowledgeHit { id: string; document: string; metadata: Record<string, unknown>; score: number; }
 
+/**
+ * Metadata `source` values whose content is TIME-BOUND (specific prices + a promo date window):
+ * the sale pamphlet and seasonal catalog, ingested as `marketing` assets. An answer grounded in
+ * these must not be written to the response cache — a cached "what are this week's deals?" opener
+ * would recite stale prices as current after the promotion changes. Stable policy/recipe docs are
+ * `source: 'knowledge'` and remain cacheable. `catalog` (individual product images) is stable
+ * enough and excluded here to keep the shipping/loyalty HERO cache beats unaffected.
+ */
+const PERISHABLE_SOURCES = new Set(['marketing']);
+
+/** True when ANY grounding hit came from a perishable (time-bound) knowledge source. */
+export function hasPerishableHit(hits: KnowledgeHit[]): boolean {
+  return hits.some(h => typeof h.metadata?.source === 'string' && PERISHABLE_SOURCES.has(h.metadata.source));
+}
+
 export interface SearchDeps {
   embed(q: string): Promise<number[]>;
   vectorSearch(vec: number[], topK: number): Promise<RankedDoc[]>;
@@ -72,7 +87,7 @@ export function buildKnowledgeSearchTool(args: {
   embed: (q: string) => Promise<number[]>;
   reranker: { rerankDocuments(q: string, docs: string[], topK?: number): Promise<{ document: string; index: number; score: number }[]> };
   rrfK: number;
-  onSignals?: (s: { ran: true; hadResults: boolean }) => void;
+  onSignals?: (s: { ran: true; hadResults: boolean; perishable: boolean }) => void;
 }) {
   const deps: SearchDeps = {
     embed: args.embed,
@@ -103,7 +118,7 @@ export function buildKnowledgeSearchTool(args: {
     inputSchema: z.object({ query: z.string(), topK: z.number().int().positive().max(20).default(5) }),
     execute: async (inputData, context) => {
       const hits = await runKnowledgeSearch(inputData.query, deps, { rrfK: args.rrfK, topK: inputData.topK });
-      args.onSignals?.({ ran: true, hadResults: hits.length > 0 });
+      args.onSignals?.({ ran: true, hadResults: hits.length > 0, perishable: hasPerishableHit(hits) });
       return { hits };
     },
   });

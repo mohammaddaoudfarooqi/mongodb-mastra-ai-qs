@@ -25,6 +25,20 @@ describe('cache decisions', () => {
     expect(isWriteEligible({ ...grounded, mutatingToolRan: true })).toBe(false);
   });
 
+  it('write is blocked when grounded in a PERISHABLE source (time-bound sale pamphlet/deals)', () => {
+    // The sale pamphlet is marketing content with specific prices and a date window; caching a
+    // "what are this week's deals?" opener for ttlDays would recite stale prices as current after
+    // the promo changes. Stable policy/recipe answers (groundedInPerishable false) still cache.
+    expect(isWriteEligible({ ...grounded, groundedInPerishable: true })).toBe(false);
+    expect(isWriteEligible({ ...grounded, groundedInPerishable: false })).toBe(true);
+  });
+
+  it('treats a missing groundedInPerishable signal as not perishable (back-compat)', () => {
+    // Existing callers that don't set the field must keep caching stable answers.
+    const legacy = { knowledgeSearchRan: true, knowledgeSearchHadResults: true, dataQueryRan: false, mutatingToolRan: false } as TurnSignals;
+    expect(isWriteEligible(legacy)).toBe(true);
+  });
+
   describe('isHedge (anti-poison guard)', () => {
     it('flags apology / could-not-retrieve answers (never cache these)', () => {
       for (const a of [

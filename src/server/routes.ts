@@ -20,7 +20,7 @@ import { buildFeedbackDoc, type FeedbackRequest } from './feedback';
 import { resolveUserId, scopeThreadId, getAuthenticator } from './auth';
 
 function freshSignals(): TurnContext['signals'] {
-  return { knowledgeSearchRan: false, knowledgeSearchHadResults: false, dataQueryRan: false, mutatingToolRan: false };
+  return { knowledgeSearchRan: false, knowledgeSearchHadResults: false, dataQueryRan: false, mutatingToolRan: false, groundedInPerishable: false };
 }
 
 /** Sentinel thrown to trigger a retry of the agent stream (distinct from a real error). */

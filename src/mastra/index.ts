@@ -54,7 +54,7 @@ export function buildApiRoutes(rc: RouteContext): ApiRoute[] {
  */
 export function buildMastra(cfg: Config = loadConfig()) {
   const { agent } = buildConcierge(cfg, {
-    signals: { knowledgeSearchRan: false, knowledgeSearchHadResults: false, dataQueryRan: false, mutatingToolRan: false },
+    signals: { knowledgeSearchRan: false, knowledgeSearchHadResults: false, dataQueryRan: false, mutatingToolRan: false, groundedInPerishable: false },
   });
   const rc = buildRouteContext(cfg);
   // Wire the checkout runner so the Cloud surface (this instance's apiRoutes) has a

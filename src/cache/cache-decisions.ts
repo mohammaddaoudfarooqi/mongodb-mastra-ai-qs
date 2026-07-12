@@ -3,6 +3,9 @@ export interface TurnSignals {
   knowledgeSearchHadResults: boolean;
   dataQueryRan: boolean;
   mutatingToolRan: boolean;
+  /** Set when a grounding hit came from a time-bound source (sale pamphlet / seasonal catalog).
+   *  Optional for back-compat: absent is treated as not perishable. See isWriteEligible. */
+  groundedInPerishable?: boolean;
 }
 
 /** Cache is attempted only on a conversation opener (no prior messages in the thread). */
@@ -12,10 +15,13 @@ export function isReadEligible(priorMessageCount: number): boolean {
 
 /**
  * A miss is cached only when the answer was grounded in knowledgeSearch results
- * AND no dynamic (dataQuery) or side-effecting tool ran during the turn.
+ * AND no dynamic (dataQuery) or side-effecting tool ran during the turn
+ * AND the grounding was not time-bound (sale pamphlet / seasonal catalog): caching a deals
+ * opener for ttlDays would recite stale prices as current after the promotion changes.
  */
 export function isWriteEligible(s: TurnSignals): boolean {
-  return s.knowledgeSearchRan && s.knowledgeSearchHadResults && !s.dataQueryRan && !s.mutatingToolRan;
+  return s.knowledgeSearchRan && s.knowledgeSearchHadResults
+    && !s.dataQueryRan && !s.mutatingToolRan && !s.groundedInPerishable;
 }
 
 /**

@@ -216,7 +216,13 @@ export function buildConcierge(cfg: Config, turn: TurnContext, deps?: ConciergeD
     embed: q => queryEmbedder.embedQuery(q),
     reranker,
     rrfK: cfg.rrfK,
-    onSignals: s => { turn.signals.knowledgeSearchRan = true; turn.signals.knowledgeSearchHadResults = s.hadResults; },
+    onSignals: s => {
+      turn.signals.knowledgeSearchRan = true;
+      turn.signals.knowledgeSearchHadResults = s.hadResults;
+      // A time-bound grounding (sale pamphlet) makes the answer un-cacheable — latch it so a
+      // later stable hit in the same turn can't clear it.
+      if (s.perishable) turn.signals.groundedInPerishable = true;
+    },
   });
   // Products surfaced by dataQuery THIS turn. Shared between the two tools (built together
   // per turn) so cartAdd can enforce retrieval grounding: only add a product the shopper's
