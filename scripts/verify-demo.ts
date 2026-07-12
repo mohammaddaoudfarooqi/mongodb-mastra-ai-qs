@@ -84,6 +84,7 @@ async function main() {
   const knowledgeBeats: { name: string; message: string }[] = [
     { name: 'multimodal-pamphlet (HERO)', message: 'Show me the summer sale pamphlet and tell me what it is promoting.' },
     { name: 'hybrid-recipe', message: 'Share a quick pasta recipe I can make tonight.' },
+    { name: 'hybrid-recipe-chicken', message: 'Find a quick weeknight chicken recipe I can make tonight.' },
     { name: 'hybrid-loyalty', message: 'How does your loyalty program work, and how do points convert to rewards?' },
     { name: 'semantic-cache (shipping)', message: 'How long does shipping take?' },
     { name: 'nl2mql-deals', message: 'Show me a few products that are on sale, with their sale prices.' },

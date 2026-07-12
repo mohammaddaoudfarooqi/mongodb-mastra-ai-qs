@@ -66,7 +66,12 @@ describe('generateProducts', () => {
     const recipes = TEXT_KNOWLEDGE.filter(d => /recipe/i.test(d.id) || /recipe/i.test(d.title));
     expect(recipes.length).toBeGreaterThan(0);
     // Keywords the demo must be able to add. Extend RECIPE_INGREDIENTS when adding a recipe.
-    const KNOWN = ['spaghetti', 'butter', 'garlic', 'chili', 'parmesan', 'parsley'];
+    const KNOWN = [
+      // 20-Minute Garlic Butter Pasta
+      'spaghetti', 'butter', 'garlic', 'chili', 'parmesan', 'parsley',
+      // 20-Minute Garlic Chicken Skillet (garlic + parsley shared with the pasta recipe)
+      'chicken', 'olive', 'lemon', 'pepper',
+    ];
     const covered = new Set(RECIPE_INGREDIENTS.flatMap(i => i.match));
     for (const kw of KNOWN) {
       const inSomeRecipe = recipes.some(r => r.text.toLowerCase().includes(kw));

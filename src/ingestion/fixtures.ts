@@ -22,11 +22,12 @@ function loadCatalog(): Product[] {
 }
 
 /**
- * Recipe ingredients the knowledge base's recipes reference (currently the 20-Minute Garlic
- * Butter Pasta). The demo must be able to ADD every one of these to the cart, so each is
- * guaranteed a real, in-stock grocery product (see recipeIngredientProducts). `match` is the
- * set of lowercase substrings that must all appear in a product name to count as that ingredient
- * — kept in sync with the recipe text and asserted by fixtures.test.ts.
+ * Recipe ingredients the knowledge base's recipes reference (the 20-Minute Garlic Butter Pasta
+ * and the 20-Minute Garlic Chicken Skillet). The demo must be able to ADD every one of these to
+ * the cart, so each is guaranteed a real, in-stock grocery product (see recipeIngredientProducts).
+ * `match` is the set of lowercase substrings that must all appear in a product name to count as
+ * that ingredient — kept in sync with the recipe text and asserted by fixtures.test.ts. garlic and
+ * parsley are shared across both recipes (listed once).
  */
 export const RECIPE_INGREDIENTS: { label: string; name: string; match: string[]; price: number }[] = [
   { label: 'spaghetti',    name: 'Spaghetti Pasta 16oz',          match: ['spaghetti'],          price: 2.49 },
@@ -35,6 +36,10 @@ export const RECIPE_INGREDIENTS: { label: string; name: string; match: string[];
   { label: 'chili flakes', name: 'Crushed Chili Flakes 2oz',      match: ['chili', 'flakes'],    price: 3.49 },
   { label: 'parmesan',     name: 'Grated Parmesan Cheese 8oz',    match: ['parmesan'],           price: 6.99 },
   { label: 'parsley',      name: 'Fresh Parsley Bunch',           match: ['parsley'],            price: 1.79 },
+  { label: 'chicken',      name: 'Boneless Chicken Breast 1lb',   match: ['chicken'],            price: 7.99 },
+  { label: 'olive oil',    name: 'Extra Virgin Olive Oil 16oz',   match: ['olive'],              price: 8.49 },
+  { label: 'lemon',        name: 'Fresh Lemons 4-pack',           match: ['lemon'],              price: 2.29 },
+  { label: 'black pepper', name: 'Ground Black Pepper 2oz',       match: ['pepper'],             price: 3.29 },
 ];
 
 /**
@@ -50,7 +55,7 @@ export function recipeIngredientProducts(): Product[] {
     category: 'grocery',
     // Name the ingredient in the description too, so a lexical/substring or $regex lookup on
     // description finds it even if the agent doesn't guess the exact product name.
-    description: `${ing.name} — ${ing.label} for home cooking (e.g. the 20-Minute Garlic Butter Pasta recipe). In stock and ready to ship.`,
+    description: `${ing.name} — ${ing.label} for home cooking (e.g. our quick weeknight recipes). In stock and ready to ship.`,
     price_usd: ing.price,
     sale_price_usd: ing.price,
     on_sale: false,
