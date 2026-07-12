@@ -371,10 +371,16 @@ export function buildCartTools(args: {
     inputSchema: z.object({ product_id: z.string() }),
     execute: async (inputData, context) => {
       args.onMutate?.();
-      await carts.updateOne(
+      const res = await carts.updateOne(
         key,
         { $pull: { lines: { product_id: inputData.product_id } }, $set: { updated_at: new Date() } },
       );
+      // Report the TRUTH: a $pull that matched nothing (wrong/slug id, item already gone, or no
+      // cart yet) modifies zero docs. Returning ok:false here stops the model from narrating a
+      // removal that never happened — mirrors cartAdd's { ok:false, reason } contract.
+      if (!res.modifiedCount) {
+        return { ok: false, reason: 'That item is not in your cart, so nothing was removed.' };
+      }
       return { ok: true };
     },
   });

@@ -26,15 +26,25 @@
 const VOLATILE_SENTENCE_RE = new RegExp(
   [
     '\\$\\s?\\d', // any dollar amount, e.g. $1,879.75
+    '\\b\\d+\\.\\d{2}\\b', // a bare-number price, e.g. "costs 29.99" (no dollar sign)
     '\\b(sub\\s?total|final total|cart total|order total|grand total)\\b',
     '\\bsavings?\\b',
     '\\bcart\\b', // "current cart", "cart now contains", "in your cart"
     '\\badded\\b.*\\b(to cart|item|product|items|products)\\b',
     '\\b(to|from)\\s+(the\\s+)?cart\\b',
     '\\bcheckout\\b',
-    '\\bplaced (an|the|your)? ?order\\b',
     '\\bcoupon\\b',
+    // Order lifecycle / status — tool-sourced (orders.status enum) and changes over time.
+    '\\border(s|ed)?\\b', // "your order", "placed an order", "order ORD-1002"
+    '\\b(shipped|delivered|placed|cancell?ed)\\b',
+    '\\bstatus\\b',
+    '\\bship(ping|ped|s)?\\b', // shipping cost/time and shipment state
+    // Loyalty program — points/tier are tool-sourced and change with spend.
+    '\\b(loyalty|points?|tier|gold|silver|platinum|bronze)\\b',
+    // Stock / availability — transient, tool-sourced.
     '\\b(in|out of)\\s+stock\\b',
+    '\\b\\d+\\s+(left|remaining|available|in\\s+stock)\\b',
+    '\\bonly\\s+\\d+\\b', // "only 3 left of the pan"
     "\\b(does\\s?n'?t|do\\s?n'?t|don't|doesn't)\\s+(carry|stock|sell|have)\\b",
     '\\bonly\\s+(carries|carry|stocks?|sells?)\\b',
     '\\binventory\\s+(is\\s+)?limited\\b',
@@ -64,22 +74,49 @@ function sanitizeFieldValue(value: string): string {
 }
 
 /**
- * Sanitize a full working-memory Markdown document. Operates line by line: on a labelled
- * profile line (`- Label: value`) it scrubs the value and keeps the label (even if the value
- * becomes empty, so the template shape is preserved); other lines (headings, blanks) pass
- * through untouched. Idempotent.
+ * Sanitize a full working-memory Markdown document. Operates line by line:
+ *  - Headings (`#…`) and blank lines pass through untouched.
+ *  - A labelled field line (`- Label: value`) keeps its label (so the template shape survives)
+ *    and has its value scrubbed — even to empty.
+ *  - A bare bullet / free-text line (`- Added 25 items to cart`, with NO colon) has its content
+ *    scrubbed; if nothing durable remains the whole line is DROPPED (no orphaned marker).
+ *    This is the case the model uses when it appends volatile sub-bullets under `- Notes:` —
+ *    missing it let the exact "$1,879.75 recited before any add" state re-persist. Idempotent.
  */
 export function sanitizeWorkingMemory(content: string | undefined | null): string {
   if (!content) return '';
-  const lines = content.split('\n');
-  const out = lines.map(line => {
-    // Match a labelled field line: optional list marker, a label, a colon, then the value.
-    const m = line.match(/^(\s*(?:[-*]\s*)?[^:\n]+:)\s*(.*)$/);
-    if (!m) return line; // heading, blank, or free text — leave as-is
-    const [, label, value] = m;
-    const cleaned = sanitizeFieldValue(value);
-    return cleaned ? `${label} ${cleaned}` : label;
-  });
+  const out: string[] = [];
+  for (const line of content.split('\n')) {
+    // Headings and blank/whitespace-only lines are structural — never touch them.
+    if (/^\s*#/.test(line) || /^\s*$/.test(line)) {
+      out.push(line);
+      continue;
+    }
+    // Labelled field line: optional list marker, a label, a colon, then the value.
+    const labelled = line.match(/^(\s*(?:[-*]\s*)?)([^:\n]+):\s*(.*)$/);
+    if (labelled) {
+      const [, marker, labelText, value] = labelled;
+      // A model-invented volatile LABEL ("Subtotal:", "Total Savings:", "Order status:") is
+      // dropped whole — only the durable template labels (Preferences, Notes, Family size, …)
+      // are non-volatile, so they survive with a scrubbed (possibly empty) value.
+      if (VOLATILE_SENTENCE_RE.test(labelText)) continue;
+      const cleaned = sanitizeFieldValue(value);
+      const label = `${marker}${labelText}:`;
+      out.push(cleaned ? `${label} ${cleaned}` : label);
+      continue;
+    }
+    // Bare bullet or free text (no colon): scrub the content after any leading list marker.
+    const bullet = line.match(/^(\s*[-*]\s+)(.*)$/);
+    if (bullet) {
+      const [, marker, text] = bullet;
+      const cleaned = sanitizeFieldValue(text);
+      if (cleaned) out.push(`${marker}${cleaned}`); // drop the whole bullet if fully volatile
+      continue;
+    }
+    // Other free text: keep only if not volatile.
+    const cleaned = sanitizeFieldValue(line);
+    if (cleaned) out.push(cleaned);
+  }
   return out.join('\n');
 }
 

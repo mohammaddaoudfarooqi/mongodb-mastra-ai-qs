@@ -70,10 +70,13 @@ function stubDb(products: any[] = PRODUCTS, promotions: any[] = PROMOTIONS, opts
         throw err;
       }
       doc ??= { userId: filter.userId, threadId: filter.threadId, lines: [] };
-      if (update.$push?.lines) doc.lines.push(update.$push.lines);
+      let modifiedCount = 0;
+      if (update.$push?.lines) { doc.lines.push(update.$push.lines); modifiedCount = 1; }
       if (update.$pull?.lines) {
         const pid = update.$pull.lines.product_id;
+        const before = doc.lines.length;
         doc.lines = doc.lines.filter((l: CartLine) => l.product_id !== pid);
+        modifiedCount = before - doc.lines.length; // 0 when nothing matched (honest-remove guard)
       }
       // Positional qty bump for the idempotent re-add path ($inc on lines.$.qty, keyed by
       // the filter's 'lines.product_id').
@@ -84,7 +87,7 @@ function stubDb(products: any[] = PRODUCTS, promotions: any[] = PROMOTIONS, opts
       }
       // Whole-lines replacement (applyCoupon stamps coupon savings via $set: { lines }).
       if (update.$set?.lines !== undefined) doc.lines = update.$set.lines;
-      return { acknowledged: true };
+      return { acknowledged: true, modifiedCount };
     },
   };
   const productsCol = {
@@ -393,6 +396,38 @@ describe('buildCartTools identity binding', () => {
     expect(cart.lines).toHaveLength(1);          // ONE line, not a duplicate
     expect(cart.lines[0].qty).toBe(2);           // the racing sibling's qty + ours
     expect(cart.lines[0].line_savings).toBeCloseTo((145.99 - 116.79) * 2, 2); // savings scale
+  });
+});
+
+// cartRemove must not narrate a removal that did not happen: if the product_id isn't in the
+// cart (wrong id, fabricated slug, or already gone), the $pull matches nothing and the tool
+// must report ok:false — otherwise the model tells the shopper "removed the mug" when the mug
+// was never there (the same fabricated-tool-outcome class as the working-memory leak).
+describe('cartRemove honesty', () => {
+  const key = { userId: 'demo', threadId: 'demo:t1' };
+
+  it('returns ok:true when a matching line is actually removed', async () => {
+    const { db, setDoc } = stubDb();
+    setDoc({ ...key, lines: [line({ product_id: 'prod_0021' })] });
+    const { cartRemove } = buildCartTools({ db, ...key });
+    const res: any = await cartRemove.execute!({ product_id: 'prod_0021' } as any, {} as any);
+    expect(res.ok).toBe(true);
+  });
+
+  it('returns ok:false with a reason when nothing matched (no fabricated removal)', async () => {
+    const { db, setDoc } = stubDb();
+    setDoc({ ...key, lines: [line({ product_id: 'prod_0021' })] });
+    const { cartRemove } = buildCartTools({ db, ...key });
+    const res: any = await cartRemove.execute!({ product_id: 'prod_9999' } as any, {} as any);
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBeTruthy();
+  });
+
+  it('returns ok:false when the cart is empty / does not exist yet', async () => {
+    const { db } = stubDb();
+    const { cartRemove } = buildCartTools({ db, ...key });
+    const res: any = await cartRemove.execute!({ product_id: 'prod_0021' } as any, {} as any);
+    expect(res.ok).toBe(false);
   });
 });
 

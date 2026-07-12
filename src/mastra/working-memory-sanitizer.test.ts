@@ -81,6 +81,70 @@ describe('sanitizeWorkingMemory', () => {
     expect(sanitizeWorkingMemory('')).toBe('');
     expect(sanitizeWorkingMemory(undefined as any)).toBe('');
   });
+
+  // --- Regression: volatile state written as a NON-colon bullet under Notes (review finding #1).
+  // Mastra's built-in prompt pushes the model to append free-form sub-bullets under "- Notes:".
+  // A bullet without a colon must still be scrubbed, or the exact "$1,879.75 recited before any
+  // add" bug re-persists via the bullet form.
+  it('scrubs volatile content on non-colon bullet lines (not just label: value lines)', () => {
+    const polluted = `# Shopper Profile
+- Preferences: Eco-friendly kitchen products
+- Notes:
+  - Added 25 items to cart totaling $1,879.75
+  - Cooks for a family of four
+  - Order ORD-1002 has shipped`;
+    const out = sanitizeWorkingMemory(polluted);
+    expect(out).toContain('- Preferences: Eco-friendly kitchen products');
+    expect(out).toContain('Cooks for a family of four'); // durable bullet survives
+    expect(out).not.toMatch(/\$1,879\.75/);
+    expect(out).not.toMatch(/added 25 items/i);
+    expect(out).not.toMatch(/ORD-1002|has shipped/i);
+    // the durable bullet keeps its list marker
+    expect(out).toMatch(/^\s*-\s+Cooks for a family of four/m);
+  });
+
+  it('drops a fully-volatile bullet line entirely rather than leaving a bare marker with junk', () => {
+    const out = sanitizeWorkingMemory('- Notes:\n  - Subtotal: $1,879.75, Total Savings: $470.00');
+    expect(out).not.toMatch(/\$1,879\.75|\$470\.00|subtotal|savings/i);
+    // no orphaned "- 75." style fragment
+    expect(out).not.toMatch(/^\s*-\s*\d/m);
+  });
+
+  it('preserves the heading and blank lines untouched', () => {
+    const doc = '# Shopper Profile\n\n- Preferences: Eco items';
+    expect(sanitizeWorkingMemory(doc)).toBe(doc);
+  });
+
+  // --- Broadened coverage (review finding #2): loyalty, order status, shipping, bare prices, stock.
+  it('strips loyalty points / tier state', () => {
+    const out = sanitizeWorkingMemory('- Notes: Prefers eco items. Gold tier member with 1,200 loyalty points.');
+    expect(out).toContain('Prefers eco items.');
+    expect(out).not.toMatch(/gold tier|loyalty points|1,200/i);
+  });
+
+  it('strips order status state', () => {
+    const out = sanitizeWorkingMemory('- Notes: Cooks for four. Your order ORD-1002 has shipped. Order status: delivered.');
+    expect(out).toContain('Cooks for four.');
+    expect(out).not.toMatch(/has shipped|order status|delivered|ORD-1002/i);
+  });
+
+  it('strips shipping-cost/time state', () => {
+    const out = sanitizeWorkingMemory('- Notes: Likes eco. Shipping is free and takes 3-5 business days.');
+    expect(out).toContain('Likes eco.');
+    expect(out).not.toMatch(/shipping/i);
+  });
+
+  it('strips a bare-number price (no dollar sign)', () => {
+    const out = sanitizeWorkingMemory('- Notes: Family of four. The fry pan costs 29.99.');
+    expect(out).toContain('Family of four.');
+    expect(out).not.toMatch(/29\.99/);
+  });
+
+  it('strips "N left / remaining / available" transient stock counts', () => {
+    const out = sanitizeWorkingMemory('- Notes: Eco shopper. We have only 3 left of the pan.');
+    expect(out).toContain('Eco shopper.');
+    expect(out).not.toMatch(/3 left|only 3/i);
+  });
 });
 
 describe('installWorkingMemorySanitizer', () => {
